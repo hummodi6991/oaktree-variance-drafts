@@ -1,0 +1,4 @@
+project_id,period,cost_code,category,budget_sar,actual_sar,currency,remarks
+Rose Palace,2025-01,MAT.FACADE,Materials,1000000,1200000,SAR,
+Rose Palace,2025-01,LAB.FACADE,Labor,300000,315000,SAR,
+Rose Palace,2025-01,CONS.DESIGN,Consultants,150000,150000,SAR,
