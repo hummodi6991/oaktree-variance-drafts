@@ -1,4 +1,6 @@
 
+"""Pydantic data models for the Variance Drafts service."""
+
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
@@ -47,16 +49,16 @@ class VarianceItem(BaseModel):
     actual_sar: float
     variance_sar: float
     variance_pct: float
-    drivers: List[str] = []
-    vendors: List[str] = []
-    evidence_links: List[str] = []
+    drivers: List[str] = Field(default_factory=list)
+    vendors: List[str] = Field(default_factory=list)
+    evidence_links: List[str] = Field(default_factory=list)
 
 class DraftRequest(BaseModel):
     budget_actuals: List[BudgetActualRow]
-    change_orders: List[ChangeOrderRow] = []
-    vendor_map: List[VendorMapRow] = []
-    category_map: List[CategoryMapRow] = []
-    config: ConfigModel = ConfigModel()
+    change_orders: List[ChangeOrderRow] = Field(default_factory=list)
+    vendor_map: List[VendorMapRow] = Field(default_factory=list)
+    category_map: List[CategoryMapRow] = Field(default_factory=list)
+    config: ConfigModel = Field(default_factory=ConfigModel)
 
 class DraftResponse(BaseModel):
     variance: VarianceItem
