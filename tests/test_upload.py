@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+from io import BytesIO
+import pandas as pd
 
 os.environ["API_KEY"] = "testkey"
 os.environ["REQUIRE_API_KEY"] = "true"
@@ -31,6 +33,53 @@ def test_upload_endpoint():
             "api_key": "testkey",
         }
         resp = client.post("/upload", files=files, data=data)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert isinstance(result, list)
+    assert all("draft_en" in item for item in result)
+
+
+def test_upload_endpoint_excel():
+    client = TestClient(app)
+    base = Path("data/templates")
+
+    def to_xlsx(name: str) -> BytesIO:
+        df = pd.read_csv(base / name)
+        buf = BytesIO()
+        df.to_excel(buf, index=False)
+        buf.seek(0)
+        return buf
+
+    files = {
+        "budget_actuals": (
+            "budget_actuals.xlsx",
+            to_xlsx("budget_actuals.csv"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        "change_orders": (
+            "change_orders.xlsx",
+            to_xlsx("change_orders.csv"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        "vendor_map": (
+            "vendor_map.xlsx",
+            to_xlsx("vendor_map.csv"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        "category_map": (
+            "category_map.xlsx",
+            to_xlsx("category_map.csv"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+    }
+    data = {
+        "materiality_pct": "5",
+        "materiality_amount_sar": "100000",
+        "bilingual": "true",
+        "enforce_no_speculation": "true",
+        "api_key": "testkey",
+    }
+    resp = client.post("/upload", files=files, data=data)
     assert resp.status_code == 200
     result = resp.json()
     assert isinstance(result, list)
