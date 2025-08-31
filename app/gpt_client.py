@@ -38,15 +38,18 @@ def generate_draft(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str]:
     try:
         from openai import OpenAI
 
-        client = OpenAI(api_key=api_key)
+        timeout = int(os.getenv("OPENAI_TIMEOUT", "10"))
+        client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt + ("\n\n" + ar_instr if ar_instr else "")},
         ]
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-5.1-mini"), messages=messages
+            model=os.getenv("OPENAI_MODEL", "gpt-5.1-mini"),
+            messages=messages,  # type: ignore[arg-type]
+            timeout=timeout,
         )
-        text = resp.choices[0].message.content.strip()
+        text = (resp.choices[0].message.content or "").strip()
         if cfg.bilingual and "\n\n" in text:
             en, ar = text.split("\n\n", 1)
             return en.strip(), ar.strip()
