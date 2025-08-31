@@ -42,7 +42,7 @@
         <div class="field">
           <label>Budget–Actuals (CSV or Excel)</label>
           <input id="fBudget" type="file" accept=".csv,.xlsx,.xls" />
-          <div class="hint">Expected columns: project_id, period, category, budget_sar, actual_sar</div>
+          <div class="hint">Expected columns: project_id, period, <b>cost_code</b>, category, budget_sar, actual_sar</div>
         </div>
         <div class="field">
           <label>Change Orders (CSV or Excel)</label>
@@ -116,6 +116,7 @@
       return {
         project_id: x.project_id ?? x.project ?? x.projectname ?? '',
         period:     x.period ?? x.month ?? x.date ?? '',
+        cost_code:  x.cost_code ?? x.code ?? x.gl_code ?? x.glcode ?? x.account_code ?? '',
         category:   x.category ?? '',
         budget_sar: Number(x.budget_sar ?? x.budget ?? x.budget_amount ?? 0),
         actual_sar: Number(x.actual_sar ?? x.actual ?? x.actual_amount ?? 0),
@@ -220,6 +221,20 @@
       // quick guard: require at least Budget–Actuals
       if (!payload.budget_actuals.length) {
         setStatus('Please provide at least a Budget–Actuals file.', 'err'); setBar(0); $('btnGen').disabled=false; return;
+      }
+
+      // preflight validation for cost_code
+      const missingCost = payload.budget_actuals.filter(r => !r.cost_code || String(r.cost_code).trim() === '');
+      if (missingCost.length) {
+        const sample = missingCost[0] || {};
+        setStatus(
+          `Budget–Actuals is missing 'cost_code' on ${missingCost.length} row(s). ` +
+          `Example: project_id=${sample.project_id ?? ''}, period=${sample.period ?? ''}. ` +
+          `Add a 'cost_code' column (e.g., MAT-001) and try again.`, 'err'
+        );
+        setBar(0);
+        $('btnGen').disabled = false;
+        return;
       }
 
       setStatus('Calling API…'); setBar(60);
