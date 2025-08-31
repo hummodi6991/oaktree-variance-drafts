@@ -202,3 +202,48 @@ async def upload(
 
     result = generate_drafts(req)
     return result
+
+
+@app.post("/ui/parse-csv")
+async def parse_csv_to_request(
+    budget_actuals: UploadFile = File(...),
+    change_orders: UploadFile = File(...),
+    vendor_map: UploadFile = File(...),
+    category_map: UploadFile = File(...),
+    materiality_pct: int = Form(5),
+    materiality_amount_sar: int = Form(100000),
+    bilingual: bool = Form(True),
+    enforce_no_speculation: bool = Form(True),
+):
+    """Parse CSV uploads into a JSON DraftRequest payload."""
+    if pd is None:
+        return JSONResponse(
+            {"error": "pandas is not installed on the server"}, status_code=500
+        )
+
+    async def to_records(upload: UploadFile) -> List[Dict[str, Any]]:
+        content = await upload.read()
+        try:
+            df = pd.read_csv(io.StringIO(content.decode("utf-8")))
+        except UnicodeDecodeError:
+            df = pd.read_csv(io.BytesIO(content))
+        df.columns = [str(c).strip() for c in df.columns]
+        return df.to_dict(orient="records")
+
+    payload = {
+        "budget_actuals": await to_records(budget_actuals),
+        "change_orders": await to_records(change_orders),
+        "vendor_map": await to_records(vendor_map),
+        "category_map": await to_records(category_map),
+        "config": {
+            "materiality_pct": int(materiality_pct),
+            "materiality_amount_sar": int(materiality_amount_sar),
+            "bilingual": bool(bilingual)
+            if isinstance(bilingual, bool)
+            else str(bilingual).lower() == "true",
+            "enforce_no_speculation": bool(enforce_no_speculation)
+            if isinstance(enforce_no_speculation, bool)
+            else str(enforce_no_speculation).lower() == "true",
+        },
+    }
+    return JSONResponse(payload)

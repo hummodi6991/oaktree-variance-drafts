@@ -1,125 +1,133 @@
 <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Oaktree Variance Drafts</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 18px; }
-    textarea { width: 100%; min-height: 280px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .row { margin: 12px 0; }
-    .btn { padding: 10px 16px; border-radius: 8px; border: 1px solid #999; background:#111; color:#fff; }
-    .btn:disabled { opacity: .5; }
-    progress { width: 100%; height: 14px; }
-    pre { background:#0b0b0b; color:#d7d7d7; padding:12px; border-radius:8px; overflow:auto; }
-    .dim { color:#666 }
-  </style>
-</head>
-<body>
-  <h2>Oaktree Variance Drafts</h2>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Oaktree Variance Drafts</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;margin:24px;line-height:1.45}
+  textarea{width:100%;height:260px;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .bar{height:8px;background:#eee;border-radius:4px;margin:12px 0}
+  .fill{height:8px;background:#2563eb;border-radius:4px;width:0%}
+  pre{background:#0b0b0b;color:#e6e6e6;padding:16px;border-radius:8px;overflow:auto}
+  button{padding:8px 14px;border-radius:8px;border:1px solid #d0d0d0;background:white;cursor:pointer}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tab{padding:8px 12px;border-radius:8px;border:1px solid #d0d0d0}
+  .tab.active{background:#2563eb;color:white;border-color:#2563eb}
+  .card{border:1px solid #e5e5e5;border-radius:12px;padding:16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .muted{color:#666}
+  label{display:block;margin-top:10px;margin-bottom:6px;font-weight:600}
+  input[type="number"]{width:200px;padding:6px 8px;border:1px solid #ccc;border-radius:6px}
+</style>
+<h1>Oaktree Variance Drafts</h1>
+<div class="tabs">
+  <div id="tab-json" class="tab active">JSON mode</div>
+  <div id="tab-csv" class="tab">CSV mode</div>
+</div>
 
-  <div class="row">
-    <p class="dim">Paste or upload JSON matching the API schema (BudgetActuals, ChangeOrders, VendorMap, CategoryMap, Config).</p>
-    <textarea id="jsonBox" placeholder='{"budget_actuals":[...], "change_orders":[...], "vendor_map":[...], "category_map":[...], "config":{...}}'></textarea>
+<div id="pane-json" class="card">
+  <p>Paste or upload JSON matching the API schema (BudgetActuals, ChangeOrders, VendorMap, CategoryMap, Config).</p>
+  <textarea id="json"></textarea>
+  <div style="margin-top:8px">
+    <input type="file" id="jsonFile" accept=".json,application/json" />
+    <button id="load">Load JSON</button>
+    <button id="run">Generate</button>
   </div>
+</div>
 
-  <div class="row">
-    <input type="file" id="file" accept=".json" />
-    <button id="loadFile" class="btn" type="button">Load JSON</button>
+<div id="pane-csv" class="card" style="display:none">
+  <div class="grid">
+    <div>
+      <label>Budget–Actuals CSV</label>
+      <input type="file" id="csv_budget" accept=".csv,text/csv" />
+    </div>
+    <div>
+      <label>Change Orders CSV</label>
+      <input type="file" id="csv_co" accept=".csv,text/csv" />
+    </div>
+    <div>
+      <label>Vendor Map CSV</label>
+      <input type="file" id="csv_vendor" accept=".csv,text/csv" />
+    </div>
+    <div>
+      <label>Category Map CSV</label>
+      <input type="file" id="csv_cat" accept=".csv,text/csv" />
+    </div>
   </div>
-
-  <div class="row">
-    <button id="genBtn" class="btn" type="button">Generate</button>
+  <div style="margin-top:14px;display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+    <div><label>Materiality %</label><input id="mat_pct" type="number" value="5"></div>
+    <div><label>Materiality amount (SAR)</label><input id="mat_amt" type="number" value="100000"></div>
+    <label><input id="bilingual" type="checkbox" checked> Bilingual</label>
+    <label><input id="no_spec" type="checkbox" checked> No speculation</label>
   </div>
-
-  <div class="row">
-    <div id="status" class="dim">Idle</div>
-    <progress id="bar" max="100" value="0"></progress>
+  <div style="margin-top:10px">
+    <button id="run_csv">Generate</button>
   </div>
+  <p class="muted">Expected columns: 
+     <b>budget_actuals.csv</b>: project_id, period, category, budget_sar, actual_sar · 
+     <b>change_orders.csv</b>: project_id, cost_code, description, linked_cost_code, file_link · 
+     <b>vendor_map.csv</b>: project_id, cost_code, vendor_name, trade, contract_id · 
+     <b>category_map.csv</b>: cost_code, category.
+  </p>
+</div>
 
-  <h3>Result</h3>
-  <pre id="result">{}</pre>
+<div class="bar"><div class="fill" id="bar"></div></div>
+<div id="msg" class="muted"></div>
+<h3>Result</h3>
+<pre id="out">{}</pre>
 
 <script>
-// --- CONFIG ---
-const ENDPOINT = '/drafts';              // Synchronous endpoint (works per your Swagger test)
-const API_KEY_HEADER = 'X-API-Key';      // Only required if your backend enforces API key
-const API_KEY = '';                      // Leave empty for demo, or paste a key if required
+  const el = (id)=>document.getElementById(id);
+  const show = (a)=>a.style.display='';
+  const hide = (a)=>a.style.display='none';
+  function setBar(p){ el('bar').style.width = p+'%'; }
+  function setMsg(t){ el('msg').textContent = t; }
 
-document.getElementById('loadFile').onclick = async () => {
-  const f = document.getElementById('file').files?.[0];
-  if (!f) return alert('Choose a .json file first');
-  const text = await f.text();
-  document.getElementById('jsonBox').value = text;
-};
+  // Tabs
+  el('tab-json').onclick = ()=>{ el('tab-json').classList.add('active'); el('tab-csv').classList.remove('active'); show(el('pane-json')); hide(el('pane-csv')); };
+  el('tab-csv').onclick  = ()=>{ el('tab-csv').classList.add('active');  el('tab-json').classList.remove('active');  show(el('pane-csv'));  hide(el('pane-json')); };
 
-document.getElementById('genBtn').onclick = generate;
-
-async function generate() {
-  const btn = document.getElementById('genBtn');
-  const bar = document.getElementById('bar');
-  const status = document.getElementById('status');
-  const result = document.getElementById('result');
-
-  let payload;
-  try {
-    payload = JSON.parse(document.getElementById('jsonBox').value);
-  } catch (e) {
-    alert('Invalid JSON: ' + e.message);
-    return;
+  // JSON mode
+  el('load').onclick = async ()=>{
+    const f = el('jsonFile').files[0]; if(!f) return;
+    const txt = await f.text(); el('json').value = txt;
+  };
+  async function callDrafts(payload){
+    const res = await fetch('/drafts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!res.ok){ const t=await res.text(); throw new Error('API '+res.status+': '+t); }
+    return await res.json();
   }
+  el('run').onclick = async ()=>{
+    try{
+      setMsg('Calling model (EN)'); setBar(75);
+      const payload = JSON.parse(el('json').value || '{}');
+      const data = await callDrafts(payload);
+      setBar(100); setMsg('Done');
+      el('out').textContent = JSON.stringify(data,null,2);
+    }catch(e){ setMsg('Error: '+e.message); setBar(0); }
+  };
 
-  btn.disabled = true;
-  result.textContent = '';
-  bar.value = 5;   status.textContent = 'Validating input…';
-
-  try {
-    // Minimal sanity checks to fail fast client-side
-    if (!Array.isArray(payload.budget_actuals)) throw new Error('Missing/invalid "budget_actuals" array');
-    if (!Array.isArray(payload.category_map)) throw new Error('Missing/invalid "category_map" array');
-    if (!payload.config) throw new Error('Missing "config" object');
-
-    bar.value = 25; status.textContent = 'Connecting to API…';
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000); // 3 minutes
-
-    const headers = {'Content-Type': 'application/json'};
-    if (API_KEY) headers[API_KEY_HEADER] = API_KEY;
-
-    const resp = await fetch(ENDPOINT, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-
-    clearTimeout(timeout);
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(()=>'');
-      throw new Error(`HTTP ${resp.status} ${resp.statusText}\n${text}`);
-    }
-
-    bar.value = 75; status.textContent = 'Formatting result…';
-
-    let data;
-    try { data = await resp.json(); }
-    catch (e) {
-      const text = await resp.text().catch(()=>'(no body)');
-      throw new Error('Response was not valid JSON:\n' + text);
-    }
-
-    result.textContent = JSON.stringify(data, null, 2);
-    bar.value = 100; status.textContent = 'Done';
-  } catch (err) {
-    bar.value = 100;
-    status.textContent = 'Failed';
-    result.textContent = String(err?.stack || err);
-  } finally {
-    btn.disabled = false;
-  }
-}
+  // CSV mode
+  el('run_csv').onclick = async ()=>{
+    try{
+      const fa = new FormData();
+      const b=el('csv_budget').files[0], c=el('csv_co').files[0], v=el('csv_vendor').files[0], m=el('csv_cat').files[0];
+      if(!b||!c||!v||!m){ setMsg('Please choose all four CSV files.'); return; }
+      fa.append('budget_actuals', b);
+      fa.append('change_orders', c);
+      fa.append('vendor_map', v);
+      fa.append('category_map', m);
+      fa.append('materiality_pct', el('mat_pct').value||'5');
+      fa.append('materiality_amount_sar', el('mat_amt').value||'100000');
+      fa.append('bilingual', el('bilingual').checked ? 'true':'false');
+      fa.append('enforce_no_speculation', el('no_spec').checked ? 'true':'false');
+      setMsg('Uploading CSVs'); setBar(25);
+      const parsed = await fetch('/ui/parse-csv', { method:'POST', body:fa });
+      if(!parsed.ok){ const t=await parsed.text(); throw new Error('Parse '+parsed.status+': '+t); }
+      const payload = await parsed.json();
+      setMsg('Calling model (EN)'); setBar(75);
+      const data = await callDrafts(payload);
+      setBar(100); setMsg('Done');
+      el('out').textContent = JSON.stringify(data,null,2);
+    }catch(e){ setMsg('Error: '+e.message); setBar(0); }
+  };
 </script>
-</body>
-</html>
+
