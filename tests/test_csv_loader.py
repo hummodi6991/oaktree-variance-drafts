@@ -24,3 +24,14 @@ def test_parse_tabular_excel():
     df.to_excel(buf, index=False)
     rows = parse_tabular(buf.getvalue(), "test.xlsx")
     assert rows == [{"project_id": 1, "period": "2024-05", "value": 100}]
+
+
+def test_parse_csv_excel_fallback():
+    """Binary Excel uploads should still be parsed by parse_csv."""
+    df = pd.DataFrame(
+        [{"project_id": 2, "period(YYYY-MM)": "2024-06", "value": 200}]
+    )
+    buf = BytesIO()
+    df.to_excel(buf, index=False)
+    rows = parse_csv(buf.getvalue())
+    assert rows == [{"project_id": 2, "period": "2024-06", "value": 200}]
