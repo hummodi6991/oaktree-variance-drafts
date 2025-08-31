@@ -20,7 +20,7 @@
 <h1>Oaktree Variance Drafts</h1>
 <div class="tabs">
   <div id="tab-json" class="tab active">JSON mode</div>
-  <div id="tab-csv" class="tab">CSV mode</div>
+  <div id="tab-csv" class="tab">CSV/XLSX mode</div>
 </div>
 
 <div id="pane-json" class="card">
@@ -33,23 +33,23 @@
   </div>
 </div>
 
-<div id="pane-csv" class="card" style="display:none">
+  <div id="pane-csv" class="card" style="display:none">
   <div class="grid">
     <div>
-      <label>Budget–Actuals CSV</label>
-      <input type="file" id="csv_budget" accept=".csv,text/csv" />
+      <label>Budget–Actuals CSV/XLSX</label>
+      <input type="file" id="csv_budget" accept=".csv,.xls,.xlsx" />
     </div>
     <div>
-      <label>Change Orders CSV</label>
-      <input type="file" id="csv_co" accept=".csv,text/csv" />
+      <label>Change Orders CSV/XLSX</label>
+      <input type="file" id="csv_co" accept=".csv,.xls,.xlsx" />
     </div>
     <div>
-      <label>Vendor Map CSV</label>
-      <input type="file" id="csv_vendor" accept=".csv,text/csv" />
+      <label>Vendor Map CSV/XLSX</label>
+      <input type="file" id="csv_vendor" accept=".csv,.xls,.xlsx" />
     </div>
     <div>
-      <label>Category Map CSV</label>
-      <input type="file" id="csv_cat" accept=".csv,text/csv" />
+      <label>Category Map CSV/XLSX</label>
+      <input type="file" id="csv_cat" accept=".csv,.xls,.xlsx" />
     </div>
   </div>
   <div style="margin-top:14px;display:flex;gap:20px;align-items:center;flex-wrap:wrap">
@@ -62,10 +62,10 @@
     <button id="run_csv">Generate</button>
   </div>
   <p class="muted">Expected columns:
-     <b>budget_actuals.csv</b>: project_id, <strong>period</strong>, cost_code (or category), budget_sar, actual_sar ·
-     <b>change_orders.csv</b>: project_id, co_id, <strong>date</strong>, amount_sar, description, linked_cost_code, file_link ·
-     <b>vendor_map.csv</b>: project_id, cost_code, vendor_name, trade, contract_id ·
-     <b>category_map.csv</b>: cost_code, category.
+     <b>budget_actuals.csv/xlsx</b>: project_id, <strong>period</strong>, cost_code (or category), budget_sar, actual_sar ·
+     <b>change_orders.csv/xlsx</b>: project_id, co_id, <strong>date</strong>, amount_sar, description, linked_cost_code, file_link ·
+     <b>vendor_map.csv/xlsx</b>: project_id, cost_code, vendor_name, trade, contract_id ·
+     <b>category_map.csv/xlsx</b>: cost_code, category.
   </p>
   <p class="muted">Tip: the uploader also accepts friendly headers <code>period(YYYY-MM)</code> and <code>date(YYYY-MM-DD)</code>; they'll be mapped automatically.</p>
 </div>
@@ -111,7 +111,7 @@
     try{
       const fa = new FormData();
       const b=el('csv_budget').files[0], c=el('csv_co').files[0], v=el('csv_vendor').files[0], m=el('csv_cat').files[0];
-      if(!b||!c||!v||!m){ setMsg('Please choose all four CSV files.'); return; }
+      if(!b||!c||!v||!m){ setMsg('Please choose all four files.'); return; }
       fa.append('budget_actuals', b);
       fa.append('change_orders', c);
       fa.append('vendor_map', v);
@@ -120,7 +120,7 @@
       fa.append('materiality_amount_sar', el('mat_amt').value||'100000');
       fa.append('bilingual', el('bilingual').checked ? 'true':'false');
       fa.append('enforce_no_speculation', el('no_spec').checked ? 'true':'false');
-      setMsg('Uploading CSVs'); setBar(25);
+      setMsg('Uploading files'); setBar(25);
       const parsed = await fetch('/ui/parse-csv', { method:'POST', body:fa });
       if(!parsed.ok){ const t=await parsed.text(); throw new Error('Parse '+parsed.status+': '+t); }
       const payload = await parsed.json();

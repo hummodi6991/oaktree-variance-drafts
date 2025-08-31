@@ -16,4 +16,4 @@ uvicorn app.main:app --reload
 Docs: `http://localhost:8000/docs`
 
 ## Example payload
-(see /data/templates for CSVs and README for example JSON)
+(see /data/templates for sample CSV/XLSX files and README for example JSON)
