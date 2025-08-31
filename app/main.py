@@ -151,10 +151,10 @@ async def upload(
     co = await change_orders.read()
     vm = await vendor_map.read()
     cm = await category_map.read()
-    df_ba = pd.read_csv(io.BytesIO(ba))
-    df_co = pd.read_csv(io.BytesIO(co))
-    df_vm = pd.read_csv(io.BytesIO(vm))
-    df_cm = pd.read_csv(io.BytesIO(cm))
+    df_ba = pd.read_csv(io.BytesIO(ba)).fillna("")
+    df_co = pd.read_csv(io.BytesIO(co)).fillna("")
+    df_vm = pd.read_csv(io.BytesIO(vm)).fillna("")
+    df_cm = pd.read_csv(io.BytesIO(cm)).fillna("")
 
     # Convert rows to pydantic models
     ba_rows = [
