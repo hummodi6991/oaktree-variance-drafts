@@ -1,4 +1,5 @@
 import csv
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -26,8 +27,9 @@ def test_create_drafts_endpoint():
         }
     }
 
+    os.environ["API_KEY"] = "testkey"
     client = TestClient(app)
-    resp = client.post('/drafts', json=payload)
+    resp = client.post('/drafts', json=payload, headers={"x-api-key": "testkey"})
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
