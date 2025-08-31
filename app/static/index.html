@@ -37,6 +37,9 @@
     </label>
     <label><input type="checkbox" name="bilingual" checked> Bilingual</label>
     <label><input type="checkbox" name="enforce_no_speculation" checked> No speculation</label>
+    <label>API Key
+      <input type="password" name="api_key">
+    </label>
     <button type="submit">Generate</button>
   </form>
   <div id="out"></div>
@@ -46,17 +49,30 @@
       e.preventDefault();
       const out = document.getElementById('out');
       out.textContent = 'Processing...';
-      const data = new FormData(form);
-      const resp = await fetch('/upload', { method: 'POST', body: data });
-      const json = await resp.json();
-      out.innerHTML = '';
-      json.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'variance';
-        div.innerHTML = `<p><strong>EN:</strong> ${item.draft_en}</p>` +
-          (item.draft_ar ? `<p><strong>AR:</strong> ${item.draft_ar}</p>` : '');
-        out.appendChild(div);
-      });
+      try {
+        const data = new FormData(form);
+        const resp = await fetch('/upload', { method: 'POST', body: data });
+        if (!resp.ok) {
+          const text = await resp.text();
+          out.textContent = `Error: ${resp.status} ${text}`;
+          return;
+        }
+        const json = await resp.json();
+        if (!Array.isArray(json)) {
+          out.textContent = `Unexpected response: ${JSON.stringify(json)}`;
+          return;
+        }
+        out.innerHTML = '';
+        json.forEach(item => {
+          const div = document.createElement('div');
+          div.className = 'variance';
+          div.innerHTML = `<p><strong>EN:</strong> ${item.draft_en}</p>` +
+            (item.draft_ar ? `<p><strong>AR:</strong> ${item.draft_ar}</p>` : '');
+          out.appendChild(div);
+        });
+      } catch (err) {
+        out.textContent = `Error: ${err.message}`;
+      }
     });
   </script>
 </body>
