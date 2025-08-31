@@ -22,7 +22,21 @@ def _canonicalize_headers(headers: List[str]) -> List[str]:
     return canon
 
 def parse_csv(upload_bytes: bytes) -> List[Dict]:
-    text = upload_bytes.decode("utf-8-sig")
+    """Parse CSV bytes into row dicts, with Excel fallback.
+
+    Historically this helper only handled UTF-8 encoded ``.csv`` files. Some
+    users, however, may accidentally upload Excel binaries (``.xls``/``.xlsx``)
+    to endpoints expecting CSV. To make the service more forgiving, we attempt
+    to decode as UTF-8 first and, on failure, fall back to the more flexible
+    :func:`parse_tabular` using an Excel parser.
+    """
+
+    try:
+        text = upload_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        # Likely an Excel file; delegate to parse_tabular for robustness
+        return parse_tabular(upload_bytes, "upload.xlsx")
+
     reader = csv.reader(io.StringIO(text))
     rows = list(reader)
     if not rows:
@@ -32,7 +46,7 @@ def parse_csv(upload_bytes: bytes) -> List[Dict]:
     for r in rows[1:]:
         if not any(x.strip() for x in r):
             continue
-        out.append({headers[i]: r[i].strip() if i < len(r) else "" for i in range(len(headers))})
+        out.append({headers[i]: r[i].strip() if i < len(headers) else "" for i in range(len(headers))})
     return out
 
 
