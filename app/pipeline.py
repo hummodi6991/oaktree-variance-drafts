@@ -86,9 +86,13 @@ def filter_materiality(items: List[VarianceItem], cfg: ConfigModel) -> List[Vari
     return [v for v in items if abs(v.variance_pct) >= cfg.materiality_pct or abs(v.variance_sar) >= cfg.materiality_amount_sar]
 
 
+def _noop_progress(pct: int, msg: str = "") -> None:
+    return None
+
+
 def generate_drafts(
     req: DraftRequest,
-    progress_cb: Callable[[int, str], None] = lambda pct, msg="": None,
+    progress_cb: Callable[[int, str], None] = _noop_progress,
 ) -> List[DraftResponse]:
     """High-level helper to build drafts from CSV-derived models."""
     progress_cb(10, "Loading & validating input")
