@@ -1,8 +1,18 @@
 
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 from collections import defaultdict
 from datetime import datetime
-from .schemas import BudgetActualRow, ChangeOrderRow, VendorMapRow, CategoryMapRow, ConfigModel, VarianceItem
+from .schemas import (
+    BudgetActualRow,
+    ChangeOrderRow,
+    VendorMapRow,
+    CategoryMapRow,
+    ConfigModel,
+    VarianceItem,
+    DraftRequest,
+    DraftResponse,
+)
+from .gpt_client import generate_draft
 
 def ym_to_range(period: str) -> Tuple[datetime, datetime]:
     start = datetime.strptime(period + "-01", "%Y-%m-%d")
@@ -74,3 +84,16 @@ def attach_drivers_and_vendors(items: List[VarianceItem], change_orders: List[Ch
 
 def filter_materiality(items: List[VarianceItem], cfg: ConfigModel) -> List[VarianceItem]:
     return [v for v in items if abs(v.variance_pct) >= cfg.materiality_pct or abs(v.variance_sar) >= cfg.materiality_amount_sar]
+
+
+async def generate_drafts(req: DraftRequest) -> List[DraftResponse]:
+    """High-level helper to build drafts from CSV-derived models."""
+    cat_lu = build_category_lookup(req.category_map)
+    items = group_variances(req.budget_actuals, cat_lu)
+    attach_drivers_and_vendors(items, req.change_orders, req.vendor_map, cat_lu)
+    material = filter_materiality(items, req.config)
+    out: List[DraftResponse] = []
+    for v in material:
+        en, ar = generate_draft(v, req.config)
+        out.append(DraftResponse(variance=v, draft_en=en, draft_ar=ar or None))
+    return out
