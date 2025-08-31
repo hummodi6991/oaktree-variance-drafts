@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Oaktree Variance Drafts — CEO View</title>
+    <style>
+      :root{
+        --brand:#0b6bcb;
+        --ok:#16a34a;
+        --muted:#6b7280;
+        --bg:#f6f7f9;
+        --panel:#ffffff;
+        --border:#e5e7eb;
+      }
+      *{box-sizing:border-box}
+      body{font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:#0f172a; margin:0; padding:24px;}
+      h1{font-size:22px; margin:0 0 12px}
+      .panel{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; box-shadow:0 1px 2px rgba(0,0,0,.03);}
+      textarea{width:100%; height:220px; font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding:10px; border:1px solid var(--border); border-radius:10px; background:#fff;}
+      .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+      .btn{background:var(--brand); color:#fff; border:0; border-radius:10px; padding:10px 14px; font-weight:600; cursor:pointer}
+      .btn.secondary{background:#111}
+      .btn[disabled]{opacity:.6; cursor:not-allowed}
+      .hint{color:var(--muted); font-size:12px; margin-top:6px}
+      .bar{height:8px; background:#eef2f7; border-radius:999px; overflow:hidden; margin:12px 0}
+      .bar>div{height:100%; width:0%; background:linear-gradient(90deg,#22c55e,#0ea5e9); transition:width .25s ease}
+      .summary{display:flex; gap:16px; flex-wrap:wrap; margin: 12px 0 0}
+      .pill{background:#f1f5f9; color:#0f172a; border:1px solid var(--border); border-radius:999px; padding:6px 10px; font-weight:600; font-size:12px}
+      .cards{display:grid; grid-template-columns: repeat(auto-fill,minmax(320px,1fr)); gap:12px; margin-top:12px}
+      .card{background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px}
+      .kv{display:grid; grid-template-columns: 110px 1fr; gap:6px; font-size:13px}
+      .kv .k{color:#475569}
+      .money{font-variant-numeric: tabular-nums}
+      .pct{font-weight:700}
+      .pct.up{color:#b91c1c}
+      .pct.down{color:#16a34a}
+      details{border-top:1px dashed var(--border); padding-top:8px}
+      code.copy{display:block; background:#0d1117; color:#cbd5e1; border-radius:8px; padding:8px; font:12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap}
+      .toolbar{display:flex; gap:8px; align-items:center; justify-content:space-between; margin-top:10px}
+      .ghost{background:#fff; color:#111; border:1px solid var(--border)}
+    </style>
+  </head>
+  <body>
+    <h1>Oaktree Variance Drafts</h1>
+
+    <div class="panel" style="margin-bottom:12px;">
+      <p class="hint">Paste or upload JSON matching the API schema (BudgetActuals, ChangeOrders, VendorMap, CategoryMap, Config).</p>
+      <textarea id="payload" placeholder='{"budget_actuals":[...], "change_orders":[...], "vendor_map":[...], "category_map":[...], "config":{...}}'></textarea>
+      <div class="row" style="margin-top:10px;">
+        <input type="file" id="jsonFile" accept=".json">
+        <button class="btn secondary" id="loadJson">Load JSON</button>
+        <button class="btn" id="go">Generate</button>
+        <div class="hint" id="status">Idle</div>
+      </div>
+      <div class="bar"><div id="barFill"></div></div>
+      <div class="toolbar">
+        <div class="summary" id="summary" style="display:none;"></div>
+        <div class="row">
+          <button class="btn ghost" id="downloadJson" style="display:none;">Download JSON</button>
+          <button class="btn ghost" id="downloadCsv" style="display:none;">Download CSV</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="cards" class="cards"></div>
+
+    <!-- Fallback raw block (collapsed) -->
+    <details style="margin-top:10px;">
+      <summary class="hint">Raw JSON (for analysts)</summary>
+      <code class="copy" id="raw">{}</code>
+    </details>
+
+    <script>
+      const $ = (s)=>document.querySelector(s);
+      const payload = $('#payload');
+      const loadBtn = $('#loadJson');
+      const goBtn = $('#go');
+      const statusEl = $('#status');
+      const bar = $('#barFill');
+      const cards = $('#cards');
+      const raw = $('#raw');
+      const summary = $('#summary');
+      const dlJson = $('#downloadJson');
+      const dlCsv  = $('#downloadCsv');
+
+      // ---- helpers
+      const SAR = new Intl.NumberFormat('en-SA',{style:'currency', currency:'SAR', maximumFractionDigits:0});
+      const PC  = new Intl.NumberFormat('en-US',{style:'percent', maximumFractionDigits:2});
+      const toPct = (n)=> (isFinite(n)? (n/100) : 0);
+      const esc = (s)=> String(s ?? '').replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+      function updateBar(pct,msg){ bar.style.width = Math.max(5, Math.min(100, pct))+'%'; statusEl.textContent = msg; }
+      function groupTotals(items){
+        let total = 0;
+        for(const it of items){ total += Number(it?.variance?.variance_sar || 0); }
+        return { count: items.length, total };
+      }
+      function makeCSV(items){
+        const head = ['project_id','period','category','budget_sar','actual_sar','variance_sar','variance_pct','drivers','vendors','evidence_links','draft_en','draft_ar'];
+        const rows = items.map(d=>{
+          const v=d.variance||{};
+          return [
+            v.project_id, v.period, v.category,
+            v.budget_sar, v.actual_sar, v.variance_sar, v.variance_pct,
+            (v.drivers||[]).join('; '),
+            (v.vendors||[]).join('; '),
+            (v.evidence_links||[]).join('; '),
+            d.draft_en || '', d.draft_ar || ''
+          ].map(x=>`"${String(x??'').replace(/"/g,'""')}"`).join(',');
+        });
+        return [head.join(','), ...rows].join('\n');
+      }
+      function download(filename, mime, content){
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(new Blob([content],{type:mime}));
+        a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+      }
+
+      // ---- render
+      function render(drafts){
+        cards.innerHTML='';
+        if (!Array.isArray(drafts)) drafts = drafts?.drafts || [];
+        if (drafts.length===0){
+          summary.style.display='none';
+          dlJson.style.display='none';
+          dlCsv.style.display='none';
+          return;
+        }
+        const {count,total} = groupTotals(drafts);
+        summary.style.display='flex';
+        summary.innerHTML = `
+          <span class="pill">Items: ${count}</span>
+          <span class="pill">Total variance: <span class="money">${SAR.format(total)}</span></span>
+        `;
+        dlJson.style.display='inline-block';
+        dlCsv.style.display='inline-block';
+        dlJson.onclick = ()=> download('variance_drafts.json','application/json', JSON.stringify(drafts,null,2));
+        dlCsv.onclick  = ()=> download('variance_drafts.csv','text/csv', makeCSV(drafts));
+
+        for(const d of drafts){
+          const v = d.variance || {};
+          const pct = Number(v.variance_pct || 0);
+          const trendClass = pct >= 0 ? 'up' : 'down';
+          const drivers = (v.drivers||[]).join(', ') || '—';
+          const vendors = (v.vendors||[]).join(', ') || '—';
+          const links = (v.evidence_links||[]).map(h=>`<a href="${esc(h)}" target="_blank" rel="noopener">evidence</a>`).join(' · ') || '—';
+          const card = document.createElement('div');
+          card.className='card';
+          card.innerHTML = `
+            <div class="kv">
+              <div class="k">Project</div><div>${esc(v.project_id||'—')}</div>
+              <div class="k">Period</div><div>${esc(v.period||'—')}</div>
+              <div class="k">Category</div><div>${esc(v.category||'—')}</div>
+              <div class="k">Budget</div><div class="money">${SAR.format(v.budget_sar||0)}</div>
+              <div class="k">Actual</div><div class="money">${SAR.format(v.actual_sar||0)}</div>
+              <div class="k">Variance</div>
+                <div><span class="money">${SAR.format(v.variance_sar||0)}</span>
+                &nbsp;<span class="pct ${trendClass}">${PC.format(toPct(pct))}</span></div>
+              <div class="k">Drivers</div><div>${esc(drivers)}</div>
+              <div class="k">Vendors</div><div>${esc(vendors)}</div>
+              <div class="k">Evidence</div><div>${links}</div>
+            </div>
+            <details>
+              <summary class="hint">Draft explanation (click to expand)</summary>
+              <div style="margin-top:6px; font-size:13px;">
+                <div style="font-weight:700; margin-bottom:4px;">English</div>
+                <div>${esc(d.draft_en||'')}</div>
+                <div style="font-weight:700; margin:10px 0 4px;">Arabic</div>
+                <div dir="rtl">${esc(d.draft_ar||'')}</div>
+              </div>
+            </details>
+          `;
+          cards.appendChild(card);
+        }
+      }
+
+      // ---- network
+      loadBtn.onclick = () => {
+        const f = $('#jsonFile').files?.[0];
+        if (!f) return;
+        const r = new FileReader();
+        r.onload = () => payload.value = r.result;
+        r.readAsText(f);
+      };
+
+      async function callDrafts(data){
+        // Try async flow if present
+        try{
+          const openapi = await fetch('/openapi.json').then(r=>r.json());
+          if (openapi?.paths?.['/drafts/async']){
+            const start = await fetch('/drafts/async',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+            if (!start.ok) throw new Error('Failed to start job');
+            const job = await start.json();
+            while(true){
+              await new Promise(r=>setTimeout(r,750));
+              const j = await fetch(`/jobs/${job.job_id}`).then(r=>r.json());
+              if (j.status==='succeeded') return j.result;
+              if (j.status==='failed')   throw new Error(j.error || 'Job failed');
+              updateBar(j.progress_pct ?? 50, `Processing… ${j.progress_pct ?? 50}%`);
+            }
+          }
+        }catch(_e){ /* fallback below */ }
+        const resp = await fetch('/drafts',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+        if (!resp.ok) throw new Error(`Request failed (${resp.status})`);
+        return resp.json();
+      }
+
+      goBtn.onclick = async ()=>{
+        try{
+          goBtn.disabled = true;
+          cards.innerHTML = '';
+          summary.style.display='none';
+          dlJson.style.display='none';
+          dlCsv.style.display='none';
+          updateBar(20,'Validating input…');
+          const data = JSON.parse(payload.value || '{}');
+          updateBar(70,'Calling model…');
+          const res = await callDrafts(data);
+          updateBar(100,'Done');
+          raw.textContent = JSON.stringify(res, null, 2);
+          render(res);
+        }catch(e){
+          statusEl.textContent = 'Error: ' + e.message + '  (Tip: open /diag/openai and /health in a new tab to verify connectivity.)';
+          raw.textContent = '{}';
+          bar.style.width = '0%';
+        }finally{
+          goBtn.disabled = false;
+        }
+      };
+    </script>
+  </body>
+  </html>
