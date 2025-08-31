@@ -1,8 +1,7 @@
 
 import os
 import io
-from fastapi import FastAPI, HTTPException, Security, File, UploadFile, Form
-from fastapi.security import APIKeyHeader
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Header, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from typing import List, Optional
@@ -14,14 +13,18 @@ from .gpt_client import generate_draft
 app = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-# --- API key security (adds "Authorize" in Swagger) --------------------------
-api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
+REQUIRE_API_KEY = os.getenv("REQUIRE_API_KEY", "true").lower() == "true"
+API_KEY = os.getenv("API_KEY", "")
 
-def require_api_key(x_api_key: str = Security(api_key_header)) -> None:
-    expected = os.getenv("API_KEY")
-    if not expected or not x_api_key or x_api_key != expected:
+
+def require_api_key(x_api_key: str | None = Header(default=None, alias="x-api-key")) -> None:
+    if not REQUIRE_API_KEY:
+        return
+    if not API_KEY or not x_api_key or x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
-# -----------------------------------------------------------------------------
+
+
+deps = [Depends(require_api_key)] if REQUIRE_API_KEY else []
 
 @app.get("/health")
 def health():
@@ -32,8 +35,8 @@ def health():
 def ui():
     return FileResponse(os.path.join("app", "static", "index.html"))
 
-@app.post("/drafts", response_model=List[DraftResponse])
-def create_drafts(req: DraftRequest, _=Security(require_api_key)):
+@app.post("/drafts", response_model=List[DraftResponse], dependencies=deps)
+def create_drafts(req: DraftRequest):
     """
     Create EN/AR variance explanation drafts.
     """
@@ -72,8 +75,7 @@ async def upload(
     )
     from app.pipeline import generate_drafts
 
-    expected = os.getenv("API_KEY")
-    if expected and api_key != expected:
+    if REQUIRE_API_KEY and (not API_KEY or not api_key or api_key != API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     # Read CSVs

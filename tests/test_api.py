@@ -2,6 +2,9 @@ import csv
 import os
 from pathlib import Path
 
+os.environ["API_KEY"] = "testkey"
+os.environ["REQUIRE_API_KEY"] = "true"
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -27,7 +30,6 @@ def test_create_drafts_endpoint():
         }
     }
 
-    os.environ["API_KEY"] = "testkey"
     client = TestClient(app)
     resp = client.post('/drafts', json=payload, headers={"x-api-key": "testkey"})
     assert resp.status_code == 200
