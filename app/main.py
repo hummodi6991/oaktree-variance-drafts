@@ -234,3 +234,89 @@ async def parse_csv_to_request(
         },
     }
     return JSONResponse(payload)
+
+
+def _read_tabular(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    """Read CSV/XLS/XLSX to DataFrame with UTF-8 fallback handling."""
+    name = (filename or "").lower()
+    if name.endswith(".csv"):
+        try:
+            return pd.read_csv(io.BytesIO(file_bytes))
+        except UnicodeDecodeError:
+            return pd.read_csv(io.BytesIO(file_bytes), encoding="latin-1")
+    if name.endswith(".xls") or name.endswith(".xlsx"):
+        return pd.read_excel(io.BytesIO(file_bytes))
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unsupported file type for {filename}. Use .csv, .xls, or .xlsx",
+    )
+
+
+def _df_to_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    df = df.rename(columns={c: c.strip() for c in df.columns})
+    return df.to_dict(orient="records")
+
+
+def _build_payload(
+    budget_actuals_rows: List[Dict[str, Any]],
+    change_orders_rows: List[Dict[str, Any]],
+    vendor_map_rows: List[Dict[str, Any]],
+    category_map_rows: List[Dict[str, Any]],
+    materiality_pct: float,
+    materiality_amount_sar: float,
+    bilingual: bool,
+    enforce_no_speculation: bool,
+) -> Dict[str, Any]:
+    return {
+        "budget_actuals": budget_actuals_rows,
+        "change_orders": change_orders_rows,
+        "vendor_map": vendor_map_rows,
+        "category_map": category_map_rows,
+        "config": {
+            "materiality_pct": materiality_pct,
+            "materiality_amount_sar": int(materiality_amount_sar),
+            "bilingual": bool(bilingual),
+            "enforce_no_speculation": bool(enforce_no_speculation),
+        },
+    }
+
+
+@app.post("/drafts/upload", response_model=List[DraftResponse])
+async def drafts_upload(
+    budget_actuals: UploadFile = File(..., description="Budget–Actuals CSV/XLS/XLSX"),
+    change_orders: UploadFile = File(..., description="Change Orders CSV/XLS/XLSX"),
+    vendor_map: UploadFile = File(..., description="Vendor Map CSV/XLS/XLSX"),
+    category_map: UploadFile = File(..., description="Category Map CSV/XLS/XLSX"),
+    materiality_pct: float = Form(5),
+    materiality_amount_sar: float = Form(100000),
+    bilingual: bool = Form(True),
+    enforce_no_speculation: bool = Form(True),
+):
+    try:
+        ba_df = _read_tabular(await budget_actuals.read(), budget_actuals.filename)
+        co_df = _read_tabular(await change_orders.read(), change_orders.filename)
+        vm_df = _read_tabular(await vendor_map.read(), vendor_map.filename)
+        cm_df = _read_tabular(await category_map.read(), category_map.filename)
+
+        payload = _build_payload(
+            _df_to_records(ba_df),
+            _df_to_records(co_df),
+            _df_to_records(vm_df),
+            _df_to_records(cm_df),
+            materiality_pct,
+            materiality_amount_sar,
+            bilingual,
+            enforce_no_speculation,
+        )
+        req = DraftRequest(**payload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse files: {e}")
+
+    try:
+        return create_drafts(req)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Draft generation failed: {e}")
