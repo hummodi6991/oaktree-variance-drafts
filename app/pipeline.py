@@ -1,5 +1,5 @@
 
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 from collections import defaultdict
 from datetime import datetime
 from .schemas import (
@@ -86,14 +86,27 @@ def filter_materiality(items: List[VarianceItem], cfg: ConfigModel) -> List[Vari
     return [v for v in items if abs(v.variance_pct) >= cfg.materiality_pct or abs(v.variance_sar) >= cfg.materiality_amount_sar]
 
 
-async def generate_drafts(req: DraftRequest) -> List[DraftResponse]:
+def generate_drafts(
+    req: DraftRequest,
+    progress_cb: Callable[[int, str], None] = lambda pct, msg="": None,
+) -> List[DraftResponse]:
     """High-level helper to build drafts from CSV-derived models."""
+    progress_cb(10, "Loading & validating input")
     cat_lu = build_category_lookup(req.category_map)
+
+    progress_cb(25, "Computing variances")
     items = group_variances(req.budget_actuals, cat_lu)
     attach_drivers_and_vendors(items, req.change_orders, req.vendor_map, cat_lu)
+
+    progress_cb(55, "Preparing EN prompt")
     material = filter_materiality(items, req.config)
     out: List[DraftResponse] = []
     for v in material:
+        progress_cb(75, "Calling model (EN)")
         en, ar = generate_draft(v, req.config)
+        progress_cb(85, "Calling model (AR)")
         out.append(DraftResponse(variance=v, draft_en=en, draft_ar=ar or None))
+
+    progress_cb(95, "Finalizing result")
+    progress_cb(100, "Done")
     return out

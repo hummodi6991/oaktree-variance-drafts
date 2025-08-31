@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Oaktree Variance Drafts — CEO</title>
+<style>
+ body{font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:980px}
+ h1{font-size:20px;margin:0 0 16px}
+ .card{border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin:12px 0}
+ .row{display:flex;gap:12px;flex-wrap:wrap}
+ textarea,pre{width:100%;min-height:160px;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa}
+ button{background:#2563eb;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer}
+ button:disabled{opacity:.6;cursor:not-allowed}
+ .progress-wrap{margin:12px 0;display:none}
+ .progress{width:100%;background:#eee;border-radius:6px;overflow:hidden;height:12px}
+ .bar{height:12px;width:0%}
+ .status{margin-top:6px;opacity:.85}
+</style>
+<h1>Oaktree Variance Drafts</h1>
+<div class="card">
+  <p>Paste or upload JSON matching the API schema (BudgetActuals, ChangeOrders, VendorMap, CategoryMap, Config).</p>
+  <div class="row">
+    <textarea id="payload" placeholder='{"budget_actuals":[...], "change_orders":[...], "vendor_map":[...], "category_map":[...], "config":{...}}'></textarea>
+  </div>
+  <div class="progress-wrap" id="pwrap">
+    <div class="progress"><div class="bar" id="pbar"></div></div>
+    <div class="status" id="pmsg">Preparing…</div>
+  </div>
+  <div class="row">
+    <button id="generateBtn">Generate</button>
+  </div>
+</div>
+<div class="card">
+  <h3>Result</h3>
+  <pre id="resultArea">{}</pre>
+</div>
+<script>
+const ui = {
+  btn: document.getElementById('generateBtn'),
+  txt: document.getElementById('payload'),
+  pwrap: document.getElementById('pwrap'),
+  pbar: document.getElementById('pbar'),
+  pmsg: document.getElementById('pmsg'),
+  out: document.getElementById('resultArea')
+};
+
+async function postJSON(url, data){
+  const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+  if(!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function poll(jobId){
+  let done = false;
+  while(!done){
+    const r = await fetch(`/jobs/${jobId}`).then(x=>x.json());
+    ui.pwrap.style.display='block';
+    ui.pbar.style.width = `${r.progress}%`;
+    ui.pbar.style.background = `linear-gradient(90deg,#3b82f6, #10b981 ${r.progress}%)`;
+    ui.pmsg.textContent = `${r.message || ''} ${r.progress}%`;
+    if(r.status === 'done'){
+      done = true;
+      ui.pmsg.textContent = 'Completed 100%';
+      ui.out.textContent = JSON.stringify(r.result, null, 2);
+      ui.btn.disabled = false;
+      break;
+    }
+    if(r.status === 'error'){
+      done = true;
+      ui.pmsg.textContent = `Error: ${r.message}`;
+      ui.btn.disabled = false;
+      break;
+    }
+    await new Promise(res=>setTimeout(res, 1000));
+  }
+}
+
+ui.btn.onclick = async () => {
+  try{
+    const data = JSON.parse(ui.txt.value || "{}");
+    ui.btn.disabled = true;
+    ui.pwrap.style.display='block';
+    ui.pbar.style.width='0%';
+    ui.pbar.style.background='#3b82f6';
+    ui.pmsg.textContent='Queued…';
+    const start = await postJSON('/drafts/async', data);
+    poll(start.job_id);
+  }catch(err){
+    ui.pmsg.textContent = `Error: ${err.message || err}`;
+    ui.btn.disabled = false;
+  }
+};
+</script>
+</html>
