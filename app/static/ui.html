@@ -61,12 +61,13 @@
   <div style="margin-top:10px">
     <button id="run_csv">Generate</button>
   </div>
-  <p class="muted">Expected columns: 
-     <b>budget_actuals.csv</b>: project_id, period, category, budget_sar, actual_sar · 
-     <b>change_orders.csv</b>: project_id, cost_code, description, linked_cost_code, file_link · 
-     <b>vendor_map.csv</b>: project_id, cost_code, vendor_name, trade, contract_id · 
+  <p class="muted">Expected columns:
+     <b>budget_actuals.csv</b>: project_id, <strong>period</strong>, cost_code (or category), budget_sar, actual_sar ·
+     <b>change_orders.csv</b>: project_id, co_id, <strong>date</strong>, amount_sar, description, linked_cost_code, file_link ·
+     <b>vendor_map.csv</b>: project_id, cost_code, vendor_name, trade, contract_id ·
      <b>category_map.csv</b>: cost_code, category.
   </p>
+  <p class="muted">Tip: the uploader also accepts friendly headers <code>period(YYYY-MM)</code> and <code>date(YYYY-MM-DD)</code>; they'll be mapped automatically.</p>
 </div>
 
 <div class="bar"><div class="fill" id="bar"></div></div>
