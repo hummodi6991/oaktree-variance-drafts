@@ -1,17 +1,31 @@
 
 import os
 import io
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Header, Depends
+import uuid
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+    Form,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from typing import List, Optional
-import pandas as pd
+from pydantic import BaseModel
+
 from .schemas import DraftRequest, DraftResponse
-from .pipeline import build_category_lookup, group_variances, attach_drivers_and_vendors, filter_materiality
-from .gpt_client import generate_draft
+from .pipeline import generate_drafts
 
 app = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 REQUIRE_API_KEY = os.getenv("REQUIRE_API_KEY", "true").lower() == "true"
 API_KEY = os.getenv("API_KEY", "")
@@ -31,25 +45,81 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/ui", include_in_schema=False)
+# -------- Job tracking --------
+class JobStatus(BaseModel):
+    job_id: str
+    status: str          # queued | running | done | error
+    progress: int        # 0..100
+    message: Optional[str] = None
+    result: Optional[dict] = None
+
+
+jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def _set_job(job_id: str, **kw):
+    if job_id in jobs:
+        jobs[job_id].update(kw)
+
+
+@app.post("/drafts/async", response_model=JobStatus, dependencies=deps)
+async def create_drafts_async(
+    req: DraftRequest, background_tasks: BackgroundTasks
+):
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "message": "Queued",
+        "result": None,
+    }
+
+    def run_job():
+        try:
+            _set_job(job_id, status="running", progress=5, message="Validating input")
+
+            def cb(pct: int, msg: str = ""):
+                _set_job(
+                    job_id,
+                    progress=max(0, min(100, int(pct))),
+                    message=msg or jobs[job_id].get("message"),
+                )
+
+            result = generate_drafts(req, progress_cb=cb)
+            _set_job(
+                job_id,
+                status="done",
+                progress=100,
+                message="Completed",
+                result=result,
+            )
+        except Exception as e:  # pragma: no cover - error path
+            _set_job(job_id, status="error", message=str(e))
+
+    background_tasks.add_task(run_job)
+    return JobStatus(**jobs[job_id])
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatus, dependencies=deps)
+async def get_job(job_id: str):
+    data = jobs.get(job_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobStatus(**data)
+
+
+@app.get("/ui")
 def ui():
-    return FileResponse(os.path.join("app", "static", "index.html"))
+    page = os.path.join(static_dir, "ceo.html")
+    if os.path.isfile(page):
+        return FileResponse(page)
+    raise HTTPException(status_code=404, detail="UI not found")
 
 @app.post("/drafts", response_model=List[DraftResponse], dependencies=deps)
 def create_drafts(req: DraftRequest):
-    """
-    Create EN/AR variance explanation drafts.
-    """
-    # existing implementation continues…
-    cat_lu = build_category_lookup(req.category_map)
-    items = group_variances(req.budget_actuals, cat_lu)
-    attach_drivers_and_vendors(items, req.change_orders, req.vendor_map, cat_lu)
-    material = filter_materiality(items, req.config)
-    out = []
-    for v in material:
-        en, ar = generate_draft(v, req.config)
-        out.append(DraftResponse(variance=v, draft_en=en, draft_ar=ar or None))
-    return out
+    """Create EN/AR variance explanation drafts."""
+    return generate_drafts(req)
 
 
 @app.post("/upload", include_in_schema=False)
@@ -66,14 +136,12 @@ async def upload(
 ):
     # Optional simple API key check using the same header logic
     from app.schemas import (
-        DraftRequest,
         BudgetActualRow,
         ChangeOrderRow,
         VendorMapRow,
         CategoryMapRow,
         ConfigModel,
     )
-    from app.pipeline import generate_drafts
 
     if REQUIRE_API_KEY and (not API_KEY or not api_key or api_key != API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
@@ -112,5 +180,5 @@ async def upload(
         config=cfg,
     )
 
-    result = await generate_drafts(req)
+    result = generate_drafts(req)
     return result
