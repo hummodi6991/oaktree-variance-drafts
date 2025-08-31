@@ -104,10 +104,6 @@
 
     <div class="card">
       <div id="result"></div>
-      <details>
-        <summary>Raw JSON (for analysts)</summary>
-        <pre id="out">{}</pre>
-      </details>
     </div>
   </div>
 
@@ -292,7 +288,6 @@
 
       const data = await resp.json();
       setStatus('Done', 'ok'); setBar(100);
-      $('out').textContent = JSON.stringify(data, null, 2);
       renderResult(data);
     } catch (err) {
       setStatus(String(err && err.message ? err.message : err), 'err');
@@ -309,8 +304,17 @@
     const container = document.createElement('div');
     container.className = 'report';
 
+    // Order variances consistently by project, period, then category
+    items.sort((a, b) => {
+      const va = a.variance ?? a;
+      const vb = b.variance ?? b;
+      return (va.project_id || '').localeCompare(vb.project_id || '') ||
+             (va.period || '').localeCompare(vb.period || '') ||
+             (va.category || '').localeCompare(vb.category || '');
+    });
+
     if (!items.length) {
-      $('result').textContent = JSON.stringify(data ?? {}, null, 2);
+      $('result').textContent = 'No variance items found.';
       return;
     }
 
