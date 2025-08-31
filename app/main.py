@@ -16,7 +16,7 @@ from fastapi import (
     Form,
 )
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .schemas import DraftRequest, DraftResponse
@@ -43,6 +43,25 @@ deps = [Depends(require_api_key)] if REQUIRE_API_KEY else []
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/diag/openai")
+def diag_openai():
+    """Quick connectivity check to the model provider."""
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    try:
+        import time
+        from openai import OpenAI
+
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        timeout = int(os.getenv("OPENAI_TIMEOUT", "10"))
+        client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
+        t0 = time.time()
+        resp = client.responses.create(model=model, input="ping")
+        ms = int((time.time() - t0) * 1000)
+        return {"ok": True, "model": model, "latency_ms": ms, "id": getattr(resp, "id", None)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "model": model, "error": str(e)})
 
 
 # -------- Job tracking --------

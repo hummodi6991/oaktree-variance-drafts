@@ -14,7 +14,8 @@
  .progress-wrap{margin:12px 0;display:none}
  .progress{width:100%;background:#eee;border-radius:6px;overflow:hidden;height:12px}
  .bar{height:12px;width:0%}
- .status{margin-top:6px;opacity:.85}
+  .status{margin-top:6px;opacity:.85}
+  .muted{color:#64748b;font-size:13px}
 </style>
 <h1>Oaktree Variance Drafts</h1>
 <div class="card">
@@ -28,6 +29,7 @@
   </div>
   <div class="row">
     <button id="generateBtn">Generate</button>
+    <span id="hint" class="status muted"></span>
   </div>
 </div>
 <div class="card">
@@ -41,11 +43,12 @@ const ui = {
   pwrap: document.getElementById('pwrap'),
   pbar: document.getElementById('pbar'),
   pmsg: document.getElementById('pmsg'),
+  hint: document.getElementById('hint'),
   out: document.getElementById('resultArea')
 };
 
-async function postJSON(url, data){
-  const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+async function postJSON(url, data, signal){
+  const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data), signal});
   if(!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -53,7 +56,17 @@ async function postJSON(url, data){
 async function poll(jobId){
   let done = false;
   while(!done){
-    const r = await fetch(`/jobs/${jobId}`).then(x=>x.json());
+    let r;
+    try{
+      const resp = await fetch(`/jobs/${jobId}`);
+      if(!resp.ok) throw new Error(await resp.text());
+      r = await resp.json();
+    }catch(err){
+      ui.pmsg.textContent = `Error: ${err.message || err}`;
+      ui.btn.disabled = false;
+      ui.hint.textContent = 'Tip: open /diag/openai and /health in a new tab to verify connectivity.';
+      break;
+    }
     ui.pwrap.style.display='block';
     ui.pbar.style.width = `${r.progress}%`;
     ui.pbar.style.background = `linear-gradient(90deg,#3b82f6, #10b981 ${r.progress}%)`;
@@ -79,14 +92,19 @@ ui.btn.onclick = async () => {
   try{
     const data = JSON.parse(ui.txt.value || "{}");
     ui.btn.disabled = true;
+    ui.hint.textContent = '';
     ui.pwrap.style.display='block';
     ui.pbar.style.width='0%';
     ui.pbar.style.background='#3b82f6';
     ui.pmsg.textContent='Queued…';
-    const start = await postJSON('/drafts/async', data);
-    poll(start.job_id);
+    const controller = new AbortController();
+    const t = setTimeout(()=>controller.abort(), 120000);
+    const start = await postJSON('/drafts/async', data, controller.signal);
+    clearTimeout(t);
+    await poll(start.job_id);
   }catch(err){
     ui.pmsg.textContent = `Error: ${err.message || err}`;
+    ui.hint.textContent = 'Tip: open /diag/openai and /health in a new tab to verify connectivity.';
     ui.btn.disabled = false;
   }
 };
