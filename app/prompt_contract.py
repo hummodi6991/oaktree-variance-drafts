@@ -1,5 +1,4 @@
 
-from typing import Tuple
 from .schemas import VarianceItem, ConfigModel
 
 SYSTEM_PROMPT = (
