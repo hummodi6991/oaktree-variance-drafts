@@ -22,10 +22,14 @@ from pydantic import BaseModel
 from .schemas import DraftRequest, DraftResponse
 from .pipeline import generate_drafts
 
-app = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.isdir(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
+
+# Static UI for CEO
+try:
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
+except Exception:
+    # Already mounted or no static dir; ignore
+    pass
 
 REQUIRE_API_KEY = os.getenv("REQUIRE_API_KEY", "true").lower() == "true"
 API_KEY = os.getenv("API_KEY", "")
@@ -128,12 +132,9 @@ async def get_job(job_id: str):
     return JobStatus(**data)
 
 
-@app.get("/ui")
-def ui():
-    page = os.path.join(static_dir, "ceo.html")
-    if os.path.isfile(page):
-        return FileResponse(page)
-    raise HTTPException(status_code=404, detail="UI not found")
+@app.get("/ui", include_in_schema=False)
+def ceo_ui():
+    return FileResponse("app/static/ui.html")
 
 @app.post("/drafts", response_model=List[DraftResponse], dependencies=deps)
 def create_drafts(req: DraftRequest):
