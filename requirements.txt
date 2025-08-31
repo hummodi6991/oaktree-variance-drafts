@@ -4,3 +4,7 @@ pydantic==2.11.7
 openai==1.102.0
 pandas==2.2.2
 python-multipart==0.0.9
+requests>=2.31
+pytest==8.4.1
+ruff==0.12.10
+mypy==1.17.1
