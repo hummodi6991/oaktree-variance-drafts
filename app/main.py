@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from .schemas import DraftRequest, DraftResponse
 from .pipeline import generate_drafts
+from .services.csv_loader import parse_csv
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
 
@@ -216,25 +217,11 @@ async def parse_csv_to_request(
     enforce_no_speculation: bool = Form(True),
 ):
     """Parse CSV uploads into a JSON DraftRequest payload."""
-    if pd is None:
-        return JSONResponse(
-            {"error": "pandas is not installed on the server"}, status_code=500
-        )
-
-    async def to_records(upload: UploadFile) -> List[Dict[str, Any]]:
-        content = await upload.read()
-        try:
-            df = pd.read_csv(io.StringIO(content.decode("utf-8")))
-        except UnicodeDecodeError:
-            df = pd.read_csv(io.BytesIO(content))
-        df.columns = [str(c).strip() for c in df.columns]
-        return df.to_dict(orient="records")
-
     payload = {
-        "budget_actuals": await to_records(budget_actuals),
-        "change_orders": await to_records(change_orders),
-        "vendor_map": await to_records(vendor_map),
-        "category_map": await to_records(category_map),
+        "budget_actuals": parse_csv(await budget_actuals.read()),
+        "change_orders": parse_csv(await change_orders.read()),
+        "vendor_map": parse_csv(await vendor_map.read()),
+        "category_map": parse_csv(await category_map.read()),
         "config": {
             "materiality_pct": int(materiality_pct),
             "materiality_amount_sar": int(materiality_amount_sar),
