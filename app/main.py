@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from .schemas import DraftRequest, DraftResponse
 from .pipeline import generate_drafts
-from .services.csv_loader import parse_csv
+from .services.csv_loader import parse_tabular
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
 
@@ -167,15 +167,15 @@ async def upload(
     if REQUIRE_API_KEY and (not API_KEY or not api_key or api_key != API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-    # Read CSVs
+    # Read CSV or Excel files
     ba = await budget_actuals.read()
     co = await change_orders.read()
     vm = await vendor_map.read()
     cm = await category_map.read()
-    df_ba = pd.read_csv(io.BytesIO(ba)).fillna("")
-    df_co = pd.read_csv(io.BytesIO(co)).fillna("")
-    df_vm = pd.read_csv(io.BytesIO(vm)).fillna("")
-    df_cm = pd.read_csv(io.BytesIO(cm)).fillna("")
+    df_ba = _read_tabular(ba, budget_actuals.filename).fillna("")
+    df_co = _read_tabular(co, change_orders.filename).fillna("")
+    df_vm = _read_tabular(vm, vendor_map.filename).fillna("")
+    df_cm = _read_tabular(cm, category_map.filename).fillna("")
 
     # Convert rows to pydantic models
     ba_rows = [
@@ -216,12 +216,20 @@ async def parse_csv_to_request(
     bilingual: bool = Form(True),
     enforce_no_speculation: bool = Form(True),
 ):
-    """Parse CSV uploads into a JSON DraftRequest payload."""
+    """Parse CSV/XLS/XLSX uploads into a JSON ``DraftRequest`` payload."""
     payload = {
-        "budget_actuals": parse_csv(await budget_actuals.read()),
-        "change_orders": parse_csv(await change_orders.read()),
-        "vendor_map": parse_csv(await vendor_map.read()),
-        "category_map": parse_csv(await category_map.read()),
+        "budget_actuals": parse_tabular(
+            await budget_actuals.read(), budget_actuals.filename or "budget_actuals"
+        ),
+        "change_orders": parse_tabular(
+            await change_orders.read(), change_orders.filename or "change_orders"
+        ),
+        "vendor_map": parse_tabular(
+            await vendor_map.read(), vendor_map.filename or "vendor_map"
+        ),
+        "category_map": parse_tabular(
+            await category_map.read(), category_map.filename or "category_map"
+        ),
         "config": {
             "materiality_pct": int(materiality_pct),
             "materiality_amount_sar": int(materiality_amount_sar),
