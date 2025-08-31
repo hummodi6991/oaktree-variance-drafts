@@ -135,7 +135,7 @@ async def get_job(job_id: str):
 
 @app.get("/ui", include_in_schema=False)
 def ceo_ui():
-    return FileResponse("app/static/ui.html")
+    return FileResponse("app/templates/ui.html")
 
 @app.post("/drafts", response_model=List[DraftResponse], dependencies=deps)
 def create_drafts(req: DraftRequest):
