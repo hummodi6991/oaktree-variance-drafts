@@ -28,6 +28,22 @@
     summary { cursor:pointer; color:#c9d5df; }
     pre { background:#0a0d11; border:1px solid #1e242d; border-radius:10px; padding:12px; overflow:auto; }
     .muted { color: var(--muted); }
+    .report { display: grid; gap: 16px; }
+    .report__summary { padding: 12px 0; border-bottom: 1px solid #2a2a2a; }
+    .report__summary h2 { margin: 0 0 6px 0; }
+    .report__card { padding: 14px; border: 1px solid #2a2a2a; border-radius: 8px; background: #0e0e0e; }
+    .card__head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+    .figures { display:flex; gap:16px; }
+    .figures .label { display:block; font-size:12px; color:#9aa; }
+    .figures .val { font-weight:600; }
+    .pill { background:#1f2937; color:#e5e7eb; padding:2px 8px; border-radius:999px; font-size:12px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin-top:10px; }
+    .chips { display:flex; gap:6px; flex-wrap:wrap; }
+    .chip { background:#111827; border:1px solid #374151; padding:2px 8px; border-radius:999px; font-size:12px; }
+    .muted { color:#9aa; }
+    .tight { margin:0; padding-left:18px; }
+    .blk { margin-top:10px; }
+    .rtl { direction: rtl; text-align: start; }
   </style>
   <!-- CSV + Excel parsers (client-side) -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
@@ -47,7 +63,7 @@
         <div class="field">
           <label>Change Orders (CSV or Excel)</label>
           <input id="fCO" type="file" accept=".csv,.xlsx,.xls" />
-          <div class="hint">Expected columns: project_id, linked_cost_code, description, file_link</div>
+          <div class="hint">Expected columns: project_id, linked_cost_code, description, file_link, <b>co_id</b>, <b>date</b>, <b>amount_sar</b></div>
         </div>
         <div class="field">
           <label>Vendor Map (CSV or Excel)</label>
@@ -87,7 +103,8 @@
     </div>
 
     <div class="card">
-      <details open>
+      <div id="result"></div>
+      <details>
         <summary>Raw JSON (for analysts)</summary>
         <pre id="out">{}</pre>
       </details>
@@ -124,6 +141,12 @@
     }).filter(r => r.project_id);
   }
 
+  function toNumber(val) {
+    if (val == null) return 0;
+    const s = String(val).replace(/[, ]/g, '').trim();
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }
   function mapChangeOrders(rows) {
     return rows.map(r => {
       const x = normalizeKeys(r);
@@ -131,9 +154,12 @@
         project_id:       x.project_id ?? x.project ?? '',
         linked_cost_code: x.linked_cost_code ?? x.cost_code ?? x.code ?? '',
         description:      x.description ?? x.desc ?? '',
-        file_link:        x.file_link ?? x.link ?? x.url ?? ''
+        file_link:        x.file_link ?? x.link ?? x.url ?? '',
+        co_id:            x.co_id ?? x.change_order_id ?? x.coid ?? x.co_number ?? x.conumber ?? x.id ?? '',
+        date:             x.date ?? x.co_date ?? x.change_order_date ?? x.issued_date ?? '',
+        amount_sar:       toNumber(x.amount_sar ?? x.amount ?? x.value ?? x.total ?? x.sar)
       };
-    }).filter(r => r.project_id);
+    }).filter(r => r.project_id && r.linked_cost_code);
   }
 
   function mapVendors(rows) {
@@ -236,6 +262,20 @@
         $('btnGen').disabled = false;
         return;
       }
+      // Validate Change Orders required fields: co_id, date, amount_sar
+      const missingCO = payload.change_orders.filter(r => !r.co_id || !r.date || !(r.amount_sar || r.amount_sar === 0));
+      if (missingCO.length) {
+        const sample = missingCO[0] || {};
+        setStatus(
+          `Change Orders file is missing required columns on ${missingCO.length} row(s). ` +
+          `Each row must include co_id, date, and amount_sar. ` +
+          `Example with issue: project_id=${sample.project_id ?? ''}, linked_cost_code=${sample.linked_cost_code ?? ''}.`,
+          'err'
+        );
+        setBar(0);
+        $('btnGen').disabled = false;
+        return;
+      }
 
       setStatus('Calling API…'); setBar(60);
       const resp = await fetch('/drafts', {
@@ -253,6 +293,7 @@
       const data = await resp.json();
       setStatus('Done', 'ok'); setBar(100);
       $('out').textContent = JSON.stringify(data, null, 2);
+      renderResult(data);
     } catch (err) {
       setStatus(String(err && err.message ? err.message : err), 'err');
       setBar(0);
@@ -261,6 +302,106 @@
       setTimeout(() => setBar(0), 1200);
     }
   });
+
+  function renderResult(data) {
+    // Normalize items
+    const items = Array.isArray(data?.variances) ? data.variances : (Array.isArray(data) ? data : []);
+    const container = document.createElement('div');
+    container.className = 'report';
+
+    if (!items.length) {
+      $('result').textContent = JSON.stringify(data ?? {}, null, 2);
+      return;
+    }
+
+    // Summary
+    const total = items.length;
+    const hdr = document.createElement('div');
+    hdr.className = 'report__summary';
+    hdr.innerHTML = `<h2>Variance Drafts (${total})</h2>
+      <p>This report shows each variance with key figures, drivers, vendors, evidence links, and bilingual drafts.</p>`;
+    container.appendChild(hdr);
+
+    // Cards
+    items.forEach((it, idx) => {
+      const v = it.variance ?? it; // tolerate either shape
+      const card = document.createElement('section');
+      card.className = 'report__card';
+
+      // Header
+      const title = `
+        <div class="card__head">
+          <div>
+            <h3>${(v.project_id ?? 'Project')}: <span class="pill">${v.category ?? ''}</span></h3>
+            <div class="muted">Period: ${v.period ?? ''} · Cost code: ${v.cost_code ?? ''}</div>
+          </div>
+          <div class="figures">
+            <div><span class="label">Budget</span><span class="val">${fmtNumber(v.budget_sar)}</span></div>
+            <div><span class="label">Actual</span><span class="val">${fmtNumber(v.actual_sar)}</span></div>
+            <div><span class="label">Variance</span><span class="val">${fmtNumber(v.variance_sar)} (${fmtPct(v.variance_pct)})</span></div>
+          </div>
+        </div>
+      `;
+
+      // Lists
+      const drivers = (v.drivers ?? []).map(d => `<li>${escapeHtml(d)}</li>`).join('') || '<li class="muted">—</li>';
+      const vendors = (v.vendors ?? []).map(s => `<span class="chip">${escapeHtml(s)}</span>`).join(' ') || '<span class="muted">—</span>';
+      const evidence = (v.evidence_links ?? []).map(u => `<li><a href="${escapeAttr(u)}" target="_blank" rel="noopener">Evidence</a></li>`).join('') || '<li class="muted">—</li>';
+
+      // Drafts
+      const en = it.draft_en ? `<p>${escapeHtml(it.draft_en)}</p>` : '<p class="muted">—</p>';
+      const ar = it.draft_ar ? `<p dir="rtl" class="rtl">${escapeHtml(it.draft_ar)}</p>` : '<p class="muted">—</p>';
+
+      card.innerHTML = `
+        ${title}
+        <div class="grid">
+          <div>
+            <h4>Drivers</h4>
+            <ul class="tight">${drivers}</ul>
+          </div>
+          <div>
+            <h4>Vendors</h4>
+            <div class="chips">${vendors}</div>
+          </div>
+          <div>
+            <h4>Evidence</h4>
+            <ul class="tight">${evidence}</ul>
+          </div>
+        </div>
+        <details class="blk">
+          <summary><strong>Draft (English)</strong></summary>
+          ${en}
+        </details>
+        <details class="blk">
+          <summary><strong>Draft (Arabic)</strong></summary>
+          ${ar}
+        </details>
+      `;
+      container.appendChild(card);
+    });
+
+    $('result').innerHTML = '';
+    $('result').appendChild(container);
+  }
+
+  // helpers used in report
+  function fmtNumber(n) {
+    const x = Number(n);
+    if (!Number.isFinite(x)) return '—';
+    return x.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  }
+  function fmtPct(p) {
+    if (p == null || p === '') return '—';
+    const x = Number(p);
+    if (!Number.isFinite(x)) return '—';
+    return x.toFixed(1) + '%';
+  }
+  function escapeHtml(s) {
+    return String(s ?? '')
+      .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+      .replaceAll('"','&quot;').replaceAll("'","&#39;");
+  }
+  function escapeAttr(s){ return escapeHtml(s); }
 </script>
 </body>
 </html>
