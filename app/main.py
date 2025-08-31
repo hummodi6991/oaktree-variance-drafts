@@ -249,9 +249,11 @@ def _read_tabular(file_bytes: bytes, filename: str) -> pd.DataFrame:
     name = (filename or "").lower()
     if name.endswith(".csv"):
         try:
-            return pd.read_csv(io.BytesIO(file_bytes))
+            return pd.read_csv(io.BytesIO(file_bytes), sep=None, engine="python")
         except UnicodeDecodeError:
-            return pd.read_csv(io.BytesIO(file_bytes), encoding="latin-1")
+            return pd.read_csv(
+                io.BytesIO(file_bytes), encoding="latin-1", sep=None, engine="python"
+            )
     if name.endswith(".xls") or name.endswith(".xlsx"):
         return pd.read_excel(io.BytesIO(file_bytes))
     raise HTTPException(
