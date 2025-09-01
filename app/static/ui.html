@@ -17,6 +17,8 @@
   label{display:block;margin-top:10px;margin-bottom:6px;font-weight:600}
   input[type="number"]{width:200px;padding:6px 8px;border:1px solid #ccc;border-radius:6px}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <h1>Oaktree Variance Drafts</h1>
 <div class="tabs">
   <div id="tab-json" class="tab active">JSON mode</div>
@@ -37,19 +39,19 @@
   <div class="grid">
     <div>
       <label>Budget–Actuals CSV/XLSX</label>
-      <input type="file" id="csv_budget" accept=".csv,.xls,.xlsx" />
+      <input type="file" id="budget_file" accept=".csv,.xls,.xlsx" />
     </div>
     <div>
       <label>Change Orders CSV/XLSX</label>
-      <input type="file" id="csv_co" accept=".csv,.xls,.xlsx" />
+      <input type="file" id="co_file" accept=".csv,.xls,.xlsx" />
     </div>
     <div>
       <label>Vendor Map CSV/XLSX</label>
-      <input type="file" id="csv_vendor" accept=".csv,.xls,.xlsx" />
+      <input type="file" id="vendor_file" accept=".csv,.xls,.xlsx" />
     </div>
     <div>
       <label>Category Map CSV/XLSX</label>
-      <input type="file" id="csv_cat" accept=".csv,.xls,.xlsx" />
+      <input type="file" id="category_file" accept=".csv,.xls,.xlsx" />
     </div>
   </div>
   <div style="margin-top:14px;display:flex;gap:20px;align-items:center;flex-wrap:wrap">
@@ -72,6 +74,8 @@
 
 <div class="bar"><div class="fill" id="bar"></div></div>
 <div id="msg" class="muted"></div>
+<div id="err" style="color:#dc2626;font-size:0.9rem;margin-top:.25rem"></div>
+<div id="warn" class="warn"></div>
 <h3>Result</h3>
 <pre id="out">{}</pre>
 
@@ -81,6 +85,9 @@
   const hide = (a)=>a.style.display='none';
   function setBar(p){ el('bar').style.width = p+'%'; }
   function setMsg(t){ el('msg').textContent = t; }
+  function showError(t){ el('err').textContent = t; }
+  function clearError(){ el('err').textContent = ''; el('warn').textContent = ''; }
+  function showWarn(t){ el('warn').textContent = t; }
 
   // Tabs
   el('tab-json').onclick = ()=>{ el('tab-json').classList.add('active'); el('tab-csv').classList.remove('active'); show(el('pane-json')); hide(el('pane-csv')); };
@@ -106,29 +113,178 @@
     }catch(e){ setMsg('Error: '+e.message); setBar(0); }
   };
 
-  // CSV mode
-  el('run_csv').onclick = async ()=>{
+  async function parseTableFile(file) {
+    // Robust CSV/XLSX reader with tolerant header mapping
+    // 1) Read file
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+
+    // 2) Try Excel first if extension .xlsx
+    const isXlsx = file.name.toLowerCase().endsWith('.xlsx');
+    let rows = [];
+    if (isXlsx) {
+      if (!window.XLSX) { throw new Error('XLSX library missing'); }
+      const wb = XLSX.read(bytes, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+    } else {
+      // CSV path: auto-detect delimiter, handle BOM, trim headers
+      rows = await new Promise((resolve, reject) => {
+        Papa.parse(new Blob([bytes]), {
+          header: true,
+          skipEmptyLines: 'greedy',
+          dynamicTyping: false,
+          transformHeader: h => (h || '')
+            .replace(/\uFEFF/g, '')          // strip BOM
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .replace(/[^a-z0-9]+/g, '_'),     // normalize
+          delimitersToGuess: [',',';','\t','|'],
+          complete: r => resolve(r.data || []),
+          error: err => reject(err)
+        });
+      });
+    }
+
+    // 3) Tolerant header mapping per table type decided later
+    return rows;
+  }
+
+  function mapBudgetActuals(rows) {
+    // Accept many header variants, map to required keys
+    const mapKey = (k) => {
+      const s = (k || '').toString().trim().toLowerCase();
+      if (['project','project_id','project_name','projectid','project_code'].includes(s)) return 'project_id';
+      if (['period','month','posting_period','fiscal_period'].includes(s)) return 'period';
+      if (['cost_code','gl_code','costcode','account','account_code'].includes(s)) return 'cost_code';
+      if (['category','reporting_category','dept','department'].includes(s)) return 'category';
+      if (['budget_sar','budget','budget_(sar)','budget_amount','budget_value'].includes(s)) return 'budget_sar';
+      if (['actual_sar','actual','actuals','actual_(sar)','actual_amount'].includes(s)) return 'actual_sar';
+      return null;
+    };
+    return rows
+      .map(r => {
+        const out = {};
+        Object.keys(r).forEach(k => {
+          const t = mapKey(k);
+          if (t) out[t] = (r[k] ?? '').toString().trim();
+        });
+        return out;
+      })
+      // keep rows that at least have project + (cost_code or category) + one of budget/actual
+      .filter(r => r.project_id && (r.cost_code || r.category) && (r.budget_sar || r.actual_sar));
+  }
+
+  function mapChangeOrders(rows) {
+    const mapKey = (k) => {
+      const s = (k || '').toString().trim().toLowerCase();
+      if (['project','project_id','project_name'].includes(s)) return 'project_id';
+      if (['linked_cost_code','cost_code','gl_code','account','account_code'].includes(s)) return 'linked_cost_code';
+      if (['co_id','change_order_id','co_number','change_order_no'].includes(s)) return 'co_id';
+      if (['date','co_date','document_date','approved_on'].includes(s)) return 'date';
+      if (['amount_sar','amount','value','value_(sar)'].includes(s)) return 'amount_sar';
+      if (['description','memo','remarks'].includes(s)) return 'description';
+      if (['file_link','evidence','link','url','document_url'].includes(s)) return 'file_link';
+      return null;
+    };
+    return rows.map(r => {
+      const out = {};
+      Object.keys(r).forEach(k => { const t = mapKey(k); if (t) out[t] = (r[k] ?? '').toString().trim(); });
+      return out;
+    }).filter(r => r.project_id && r.linked_cost_code && r.co_id && r.date && r.amount_sar);
+  }
+
+  function mapVendorMap(rows) {
+    const key = (k) => {
+      const s = (k||'').toLowerCase();
+      if (['project','project_id','project_name'].includes(s)) return 'project_id';
+      if (['cost_code','gl_code','account','account_code'].includes(s)) return 'cost_code';
+      if (['vendor_name','supplier','vendor','supplier_name'].includes(s)) return 'vendor_name';
+      if (['trade','category','division'].includes(s)) return 'trade';
+      if (['contract_id','po','po_number','contract','agreement_no'].includes(s)) return 'contract_id';
+      return null;
+    };
+    return rows.map(r => {
+      const out = {};
+      Object.keys(r).forEach(k => { const t = key(k); if (t) out[t] = (r[k] ?? '').toString().trim(); });
+      return out;
+    }).filter(r => r.project_id && r.cost_code && r.vendor_name);
+  }
+
+  function mapCategoryMap(rows) {
+    const key = (k) => {
+      const s = (k||'').toLowerCase();
+      if (['cost_code','gl_code','account','account_code'].includes(s)) return 'cost_code';
+      if (['category','reporting_category','group'].includes(s)) return 'category';
+      return null;
+    };
+    return rows.map(r => {
+      const out = {};
+      Object.keys(r).forEach(k => { const t = key(k); if (t) out[t] = (r[k] ?? '').toString().trim(); });
+      return out;
+    }).filter(r => r.cost_code && r.category);
+  }
+
+  async function buildPayloadFromFiles(files) {
+    // parse
+    const budgetRows = files.budget_actuals ? await parseTableFile(files.budget_actuals) : [];
+    const changeRows = files.change_orders ? await parseTableFile(files.change_orders) : [];
+    const vendorRows  = files.vendor_map ? await parseTableFile(files.vendor_map) : [];
+    const categoryRows= files.category_map ? await parseTableFile(files.category_map) : [];
+
+    // tolerant maps
+    const payload = {
+      budget_actuals: mapBudgetActuals(budgetRows),
+      change_orders:  mapChangeOrders(changeRows),
+      vendor_map:     mapVendorMap(vendorRows),
+      category_map:   mapCategoryMap(categoryRows),
+    };
+
+    return payload;
+  }
+
+  async function onGenerateClicked() {
+    // ... gather files as before
+    const files = {
+      budget_actuals: document.getElementById('budget_file').files[0] || null,
+      change_orders:  document.getElementById('co_file').files[0] || null,
+      vendor_map:     document.getElementById('vendor_file').files[0] || null,
+      category_map:   document.getElementById('category_file').files[0] || null,
+    };
+
+    // NEW: only block when no Budget–Actuals file is physically selected
+    if (!files.budget_actuals) {
+      showError('Please provide at least a Budget–Actuals file.');
+      return;
+    }
+
+    clearError();
     try{
-      const fa = new FormData();
-      const b=el('csv_budget').files[0], c=el('csv_co').files[0], v=el('csv_vendor').files[0], m=el('csv_cat').files[0];
-      if(!b||!c||!v||!m){ setMsg('Please choose all four files.'); return; }
-      fa.append('budget_actuals', b);
-      fa.append('change_orders', c);
-      fa.append('vendor_map', v);
-      fa.append('category_map', m);
-      fa.append('materiality_pct', el('mat_pct').value||'5');
-      fa.append('materiality_amount_sar', el('mat_amt').value||'100000');
-      fa.append('bilingual', el('bilingual').checked ? 'true':'false');
-      fa.append('enforce_no_speculation', el('no_spec').checked ? 'true':'false');
-      setMsg('Uploading files'); setBar(25);
-      const parsed = await fetch('/ui/parse-csv', { method:'POST', body:fa });
-      if(!parsed.ok){ const t=await parsed.text(); throw new Error('Parse '+parsed.status+': '+t); }
-      const payload = await parsed.json();
+      setMsg('Parsing files'); setBar(25);
+      const payload = await buildPayloadFromFiles(files);
+      payload.config = {
+        materiality_pct: Number(el('mat_pct').value||5),
+        materiality_amount_sar: Number(el('mat_amt').value||100000),
+        bilingual: el('bilingual').checked,
+        enforce_no_speculation: el('no_spec').checked,
+      };
+      // If parsing produced zero budget rows, explain why but still send to backend (it will validate again).
+      if (!payload.budget_actuals.length) {
+        showWarn('Could not recognize columns in Budget–Actuals. We will still send the file for server-side parsing.');
+      }
+
       setMsg('Calling model (EN)'); setBar(75);
       const data = await callDrafts(payload);
       setBar(100); setMsg('Done');
       el('out').textContent = JSON.stringify(data,null,2);
     }catch(e){ setMsg('Error: '+e.message); setBar(0); }
-  };
+  }
+
+  el('run_csv').onclick = onGenerateClicked;
 </script>
+
+<style>
+  .warn { color:#f6c453; font-size:0.9rem; margin-top:.25rem }
+</style>
 
