@@ -117,43 +117,131 @@
     const out = {};
     for (const [k,v] of Object.entries(row)) {
       if (k == null) continue;
-      const key = String(k).trim().toLowerCase().replace(/\s+/g,'_');
+      // lower, trim, collapse spaces; normalize dashes/underscores; drop stray punctuation
+      let key = String(k).toLowerCase().trim();
+      key = key.replace(/[\u200B-\u200D\uFEFF]/g, '');       // zero-width
+      key = key.replace(/[\.\(\)\[\]]/g, ' ');               // dots/brackets → space
+      key = key.replace(/[-]+/g, ' ').replace(/_+/g, ' ');   // dashes/underscores → space
+      key = key.replace(/\s+/g, ' ').trim().replace(/\s+/g,'_'); // collapse spaces → underscore
       out[key] = v;
     }
     return out;
   }
 
+  /* Tolerance helpers: header aliases, numbers, dates, period formats */
+  function aliasValue(obj, keys, fallback='') {
+    for (const k of keys) {
+      const v = obj[k];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+    }
+    return fallback;
+  }
+  function toNumber(val) {
+    if (val === null || val === undefined) return 0;
+    let s = String(val).trim().toLowerCase();
+    s = s.replace(/sar|ر\.?س|ريال/g,'');        // remove currency words
+    s = s.replace(/[, \s]/g,'');                 // remove commas/spaces
+    // negatives in parentheses: (45000)
+    const neg = /^\(.*\)$/.test(s);
+    if (neg) s = s.replace(/^\(|\)$/g,'');
+    const n = Number(s);
+    return Number.isFinite(n) ? (neg ? -n : n) : 0;
+  }
+  function toIsoDate(val) {
+    if (val === null || val === undefined || val === '') return '';
+    const s = String(val).trim();
+    // Try common formats
+    const tryParse = (fmt) => {
+      // very light parser instead of full libs; fallback to Date constructor
+      return null;
+    };
+    // YYYY-MM-DD or YYYY/MM/DD
+    let m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+    if (m) {
+      const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+      return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    }
+    // DD-MM-YYYY or DD/MM/YYYY
+    m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+    if (m) {
+      const d = Number(m[1]), mo = Number(m[2]), y = Number(m[3]);
+      return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    }
+    // Month Year (Jan 2025 / January 2025) → first of month
+    m = s.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{4})$/i);
+    if (m) {
+      const monthNames = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12};
+      const mo = monthNames[m[1].slice(0,3).toLowerCase()];
+      const y = Number(m[2]);
+      return `${y}-${String(mo).padStart(2,'0')}-01`;
+    }
+    // Fallback to Date parsing
+    const d = new Date(s);
+    if (!isNaN(d)) return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    return '';
+  }
+  function toPeriodYYYYMM(val) {
+    if (val === null || val === undefined || val === '') return '';
+    const s = String(val).trim();
+    // YYYY-MM or YYYY/MM
+    let m = s.match(/^(\d{4})[-\/](\d{1,2})$/);
+    if (m) return `${m[1]}-${String(Number(m[2])).padStart(2,'0')}`;
+    // Month Year
+    m = s.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{4})$/i);
+    if (m) {
+      const monthNames = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12};
+      const mo = monthNames[m[1].slice(0,3).toLowerCase()];
+      return `${m[2]}-${String(mo).padStart(2,'0')}`;
+    }
+    // If a full date, reduce to YYYY-MM
+    const iso = toIsoDate(s);
+    if (iso) return iso.slice(0,7);
+    return '';
+  }
+  function normCostCode(s) {
+    if (s === null || s === undefined) return '';
+    return String(s).trim().toUpperCase().replace(/[\s_]+/g,'').replace(/–/g,'-');
+  }
+
   function mapBudget(rows) {
     return rows.map(r => {
       const x = normalizeKeys(r);
-      return {
-        project_id: x.project_id ?? x.project ?? x.projectname ?? '',
-        period:     x.period ?? x.month ?? x.date ?? '',
-        cost_code:  x.cost_code ?? x.code ?? x.gl_code ?? x.glcode ?? x.account_code ?? '',
-        category:   x.category ?? '',
-        budget_sar: Number(x.budget_sar ?? x.budget ?? x.budget_amount ?? 0),
-        actual_sar: Number(x.actual_sar ?? x.actual ?? x.actual_amount ?? 0),
-      };
-    }).filter(r => r.project_id);
-  }
+      const project_id = aliasValue(x, ['project_id','project','projectname','proj_id']);
+      const periodRaw  = aliasValue(x, ['period','month','month_year','date','posting_period']);
+      const cost_raw   = aliasValue(x, ['cost_code','costcode','cost_code','gl_code','glcode','account_code','account_code','code','gl']);
+      const category   = aliasValue(x, ['category','cat','cost_category','reporting_category','group']);
+      const budgetRaw  = aliasValue(x, ['budget_sar','budget','budget_amount','planned_sar','plan']);
+      const actualRaw  = aliasValue(x, ['actual_sar','actual','actual_amount','spent','spend_sar']);
 
-  function toNumber(val) {
-    if (val == null) return 0;
-    const s = String(val).replace(/[, ]/g, '').trim();
-    const n = Number(s);
-    return Number.isFinite(n) ? n : 0;
+      return {
+        project_id: project_id || '',
+        period: toPeriodYYYYMM(periodRaw),
+        cost_code: normCostCode(cost_raw),
+        category: category || '',
+        budget_sar: toNumber(budgetRaw),
+        actual_sar: toNumber(actualRaw),
+      };
+    }).filter(r => r.project_id && r.cost_code);
   }
   function mapChangeOrders(rows) {
     return rows.map(r => {
       const x = normalizeKeys(r);
+      const project_id = aliasValue(x, ['project_id','project','projectname','proj_id']);
+      const cost_raw   = aliasValue(x, ['linked_cost_code','cost_code','costcode','code','gl_code','glcode','account_code']);
+      const desc       = aliasValue(x, ['description','desc','details','subject']);
+      const link       = aliasValue(x, ['file_link','link','url','evidence','evidence_link','file']);
+      const coid       = aliasValue(x, ['co_id','change_order_id','co_number','co number','coid','id']);
+      const dateRaw    = aliasValue(x, ['date','co_date','change_order_date','issued_date']);
+      const amtRaw     = aliasValue(x, ['amount_sar','amount','value','total','sar','amount_(sar)','total_sar']);
+
       return {
-        project_id:       x.project_id ?? x.project ?? '',
-        linked_cost_code: x.linked_cost_code ?? x.cost_code ?? x.code ?? '',
-        description:      x.description ?? x.desc ?? '',
-        file_link:        x.file_link ?? x.link ?? x.url ?? '',
-        co_id:            x.co_id ?? x.change_order_id ?? x.coid ?? x.co_number ?? x.conumber ?? x.id ?? '',
-        date:             x.date ?? x.co_date ?? x.change_order_date ?? x.issued_date ?? '',
-        amount_sar:       toNumber(x.amount_sar ?? x.amount ?? x.value ?? x.total ?? x.sar)
+        project_id: project_id || '',
+        linked_cost_code: normCostCode(cost_raw),
+        description: desc || '',
+        file_link: link || '',
+        co_id: coid || '',
+        date: toIsoDate(dateRaw),
+        amount_sar: toNumber(amtRaw)
       };
     }).filter(r => r.project_id && r.linked_cost_code);
   }
@@ -161,20 +249,27 @@
   function mapVendors(rows) {
     return rows.map(r => {
       const x = normalizeKeys(r);
+      const project_id = aliasValue(x, ['project_id','project','projectname','proj_id']);
+      const cost_raw   = aliasValue(x, ['cost_code','costcode','code','gl_code','glcode','account_code']);
+      const vname      = aliasValue(x, ['vendor_name','vendor','supplier','supplier_name','contractor','contractor_name']);
+      const trade      = aliasValue(x, ['trade','discipline','category','scope']);
+      const cid        = aliasValue(x, ['contract_id','contract','contract_no','contract_no.','contract_number','po','po_number']);
       return {
-        project_id:  x.project_id ?? x.project ?? '',
-        cost_code:   x.cost_code ?? x.code ?? '',
-        vendor_name: x.vendor_name ?? x.vendor ?? x.supplier ?? '',
-        trade:       x.trade ?? '',
-        contract_id: x.contract_id ?? x.contract ?? ''
+        project_id: project_id || '',
+        cost_code: normCostCode(cost_raw),
+        vendor_name: vname || '',
+        trade: trade || '',
+        contract_id: cid || ''
       };
-    }).filter(r => r.project_id);
+    }).filter(r => r.project_id && r.cost_code);
   }
 
   function mapCategories(rows) {
     return rows.map(r => {
       const x = normalizeKeys(r);
-      return { cost_code: x.cost_code ?? x.code ?? '', category: x.category ?? '' };
+      const cost_raw = aliasValue(x, ['cost_code','costcode','code','gl_code','glcode','account_code']);
+      const cat      = aliasValue(x, ['category','cat','reporting_category','group']);
+      return { cost_code: normCostCode(cost_raw), category: cat || '' };
     }).filter(r => r.cost_code);
   }
 
