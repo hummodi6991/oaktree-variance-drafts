@@ -6,6 +6,11 @@
 3) Draft investor-ready explanations (EN/AR) using a prompt contract
 4) Return JSON drafts for analyst review (with evidence links)
 
+The app supports two mutually-exclusive upload modes:
+
+- **Structured track** – provide four CSV/Excel files (budget–actuals, change orders, vendor map, category map).
+- **Freeform track** – provide a single CSV/Excel/Word/PDF/text file. The app will attempt to extract rows and totals using deterministic parsing with an LLM fallback.
+
 ## Run
 ```
 pip install fastapi uvicorn pydantic openai
