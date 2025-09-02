@@ -84,3 +84,27 @@ def test_upload_endpoint_excel():
     result = resp.json()
     assert isinstance(result, list)
     assert all("draft_en" in item for item in result)
+
+
+def test_upload_single_data_file():
+    client = TestClient(app)
+    files = {
+        "data_file": ("notes.txt", b"item a 100\nitem b 200", "text/plain"),
+    }
+    resp = client.post("/upload", files=files, data={"api_key": "testkey"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    assert any(r.get("description") for r in data["rows"])
+
+
+def test_upload_mutual_exclusive():
+    client = TestClient(app)
+    base = Path("data/templates")
+    with (base / "budget_actuals.csv").open("rb") as ba:
+        files = {
+            "budget_actuals": ("budget_actuals.csv", ba, "text/csv"),
+            "data_file": ("notes.txt", b"item 1", "text/plain"),
+        }
+        resp = client.post("/upload", files=files, data={"api_key": "testkey"})
+    assert resp.status_code == 400

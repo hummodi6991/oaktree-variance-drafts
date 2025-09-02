@@ -329,10 +329,11 @@ def create_drafts(req: DraftRequest):
 
 @app.post("/upload", include_in_schema=False)
 async def upload(
-    budget_actuals: UploadFile = File(...),
-    change_orders: UploadFile = File(...),
-    vendor_map: UploadFile = File(...),
-    category_map: UploadFile = File(...),
+    budget_actuals: UploadFile | None = File(None),
+    change_orders: UploadFile | None = File(None),
+    vendor_map: UploadFile | None = File(None),
+    category_map: UploadFile | None = File(None),
+    data_file: UploadFile | None = File(None),
     materiality_pct: int = Form(5),
     materiality_amount_sar: int = Form(100000),
     bilingual: bool = Form(True),
@@ -351,7 +352,44 @@ async def upload(
     if REQUIRE_API_KEY and (not API_KEY or not api_key or api_key != API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-    # Read CSV or Excel files
+    # Track B: single freeform file
+    if data_file is not None:
+        if any(f is not None for f in [budget_actuals, change_orders, vendor_map, category_map]):
+            raise HTTPException(status_code=400, detail="Provide either the 4 structured files or a single data_file")
+        data = await data_file.read()
+        name = data_file.filename or "upload"
+        rows: List[Dict[str, Any]] = []
+        df = _df_from_bytes(name, data)
+        if not df.empty:
+            rows = _rows_from_tablelike(df)
+            if all(
+                not (r.get("description") or r.get("amount_sar") is not None)
+                for r in rows
+            ):
+                rows = []
+        if not rows:
+            text = _text_from_bytes(name, data)
+            rows = _rows_from_text(text)
+            if not rows:
+                for it in extract_items_via_llm(text):
+                    rows.append({
+                        "project_id": None,
+                        "linked_cost_code": None,
+                        "description": it.get("description"),
+                        "file_link": None,
+                        "co_id": it.get("co_id"),
+                        "date": None,
+                        "amount_sar": it.get("amount_sar"),
+                        "vendor_name": None,
+                    })
+        filtered = [r for r in rows if (r.get("description") or r.get("amount_sar") is not None)]
+        total = sum(r.get("amount_sar") or 0 for r in filtered)
+        return {"rows": filtered, "count": len(filtered), "total_amount_sar": total}
+
+    # Track A: four structured files
+    if not all([budget_actuals, change_orders, vendor_map, category_map]):
+        raise HTTPException(status_code=400, detail="Missing one or more required files")
+
     ba = await budget_actuals.read()
     co = await change_orders.read()
     vm = await vendor_map.read()
@@ -361,7 +399,6 @@ async def upload(
     df_vm = _read_tabular(vm, vendor_map.filename).fillna("")
     df_cm = _read_tabular(cm, category_map.filename).fillna("")
 
-    # Convert rows to pydantic models
     ba_rows = [
         BudgetActualRow(**(r._asdict() if hasattr(r, "_asdict") else dict(r)))
         for r in df_ba.to_dict(orient="records")
