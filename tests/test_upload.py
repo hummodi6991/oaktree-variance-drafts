@@ -95,7 +95,8 @@ def test_upload_single_data_file():
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 2
-    assert any(r.get("description") for r in data["rows"])
+    cards = data["procurement_summary"]
+    assert any(c.get("description") for c in cards)
 
 
 def test_upload_mutual_exclusive():
@@ -139,3 +140,4 @@ def test_pdf_fallback(monkeypatch):
     data = resp.json()
     assert data["count"] == 2
     assert data["total_amount_sar"] == 300
+    assert len(data["procurement_summary"]) == 2
