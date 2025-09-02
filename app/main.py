@@ -34,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from .schemas import DraftRequest, DraftResponse
+from .schemas import DraftRequest, DraftResponse, ProcurementItem
 from .pipeline import generate_drafts
 from .services.csv_loader import parse_tabular
 from .llm.extract_from_text import extract_items_via_llm
@@ -157,6 +157,51 @@ def _rows_from_text(text: str) -> List[Dict[str, Any]]:
         item["amount_sar"] = maybe_amount
         rows.append(item)
     return rows
+
+
+def _build_procurement_summary(rows: List[Dict[str, Any]], bilingual: bool = True) -> List[ProcurementItem]:
+    """Convert raw row dicts to ProcurementItem cards."""
+    out: List[ProcurementItem] = []
+    for r in rows:
+        if not (r.get("description") or r.get("amount_sar") or r.get("vendor_name")):
+            continue
+        parts_en: List[str] = []
+        if r.get("co_id"):
+            parts_en.append(f"Item {r['co_id']}")
+        if r.get("description"):
+            parts_en.append(str(r["description"]))
+        if r.get("vendor_name"):
+            parts_en.append(f"from {r['vendor_name']}")
+        if r.get("amount_sar") is not None:
+            parts_en.append(f"for SAR {r['amount_sar']:,.0f}")
+        en = " ".join(parts_en).strip()
+        ar = None
+        if bilingual:
+            parts_ar: List[str] = []
+            if r.get("co_id"):
+                parts_ar.append(f"البند {r['co_id']}")
+            if r.get("description"):
+                parts_ar.append(str(r["description"]))
+            if r.get("vendor_name"):
+                parts_ar.append(f"من {r['vendor_name']}")
+            if r.get("amount_sar") is not None:
+                parts_ar.append(f"بقيمة {r['amount_sar']:,.0f} ريال")
+            ar = " ".join(parts_ar).strip()
+        out.append(
+            ProcurementItem(
+                item_id=r.get("co_id") or r.get("linked_cost_code"),
+                description=r.get("description"),
+                quantity=r.get("quantity"),
+                unit_price=r.get("unit_price"),
+                amount_sar=r.get("amount_sar"),
+                vendor=r.get("vendor_name"),
+                document_date=r.get("date"),
+                evidence_link=r.get("file_link") or "Uploaded procurement file",
+                draft_en=en,
+                draft_ar=ar,
+            )
+        )
+    return out
 
 
 @app.post("/extract/freeform")
@@ -384,8 +429,13 @@ async def upload(
                         "vendor_name": None,
                     })
         filtered = [r for r in rows if (r.get("description") or r.get("amount_sar") is not None)]
-        total = sum(r.get("amount_sar") or 0 for r in filtered)
-        return {"rows": filtered, "count": len(filtered), "total_amount_sar": total}
+        cards = _build_procurement_summary(filtered, bilingual=bilingual)
+        total = sum(c.amount_sar or 0 for c in cards)
+        return {
+            "procurement_summary": [c.model_dump() for c in cards],
+            "count": len(cards),
+            "total_amount_sar": total,
+        }
 
     # Track A: four structured files
     if not all([budget_actuals, change_orders, vendor_map, category_map]):

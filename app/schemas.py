@@ -65,3 +65,18 @@ class DraftResponse(BaseModel):
     draft_en: str
     draft_ar: Optional[str] = None
     analyst_notes: Optional[str] = None
+
+
+class ProcurementItem(BaseModel):
+    """Lightweight summary card for single-file procurement uploads."""
+
+    item_id: Optional[str] = None
+    description: Optional[str] = None
+    quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+    amount_sar: Optional[float] = None
+    vendor: Optional[str] = None
+    document_date: Optional[str] = None
+    evidence_link: str = "Uploaded procurement file"
+    draft_en: str
+    draft_ar: Optional[str] = None
