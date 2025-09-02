@@ -2,9 +2,20 @@
 import os
 import io
 import uuid
+import csv  # noqa: F401
+import json  # noqa: F401
 from typing import Any, Dict, List, Optional
 
+import chardet
 import pandas as pd
+try:
+    from pdfminer.high_level import extract_text as pdf_extract_text
+except Exception:  # pragma: no cover - optional dependency
+    pdf_extract_text = None
+try:
+    import docx
+except Exception:  # pragma: no cover - optional dependency
+    docx = None
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -26,6 +37,142 @@ from .parsers.procurement_pdf import parse_procurement_pdf
 from .llm.extract_from_text import extract_items_via_llm
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
+
+SAFE_CO_COLS = [
+    "co_id",
+    "date",
+    "amount_sar",
+    "description",
+    "linked_cost_code",
+    "project_id",
+    "vendor_name",
+    "file_link",
+]
+
+
+def _df_from_bytes(name: str, data: bytes) -> pd.DataFrame:
+    low = name.lower()
+    if low.endswith(".csv"):
+        enc = chardet.detect(data).get("encoding") or "utf-8"
+        return pd.read_csv(io.BytesIO(data), encoding=enc)
+    if low.endswith(".xlsx") or low.endswith(".xls"):
+        return pd.read_excel(io.BytesIO(data))
+    try:
+        enc = chardet.detect(data).get("encoding") or "utf-8"
+        return pd.read_csv(io.BytesIO(data), encoding=enc)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _text_from_bytes(name: str, data: bytes) -> str:
+    low = name.lower()
+    if low.endswith(".pdf") and pdf_extract_text:
+        try:
+            return pdf_extract_text(io.BytesIO(data)) or ""
+        except Exception:
+            return ""
+    if low.endswith(".docx") and docx:
+        try:
+            d = docx.Document(io.BytesIO(data))
+            return "\n".join(p.text for p in d.paragraphs)
+        except Exception:
+            return ""
+    enc = chardet.detect(data).get("encoding") or "utf-8"
+    try:
+        return data.decode(enc, errors="ignore")
+    except Exception:
+        return ""
+
+
+def _rows_from_tablelike(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    colmap: Dict[str, str] = {}
+    for c in df.columns:
+        k = c.strip().lower()
+        if k in ["co id", "co_id", "#", "id"]:
+            colmap["co_id"] = c
+        elif k in ["date", "co_date", "doc_date"]:
+            colmap["date"] = c
+        elif k in ["amount", "amount_sar", "value", "sar", "total_sar"]:
+            colmap["amount_sar"] = c
+        elif k in ["desc", "description", "scope", "item", "line_item"]:
+            colmap["description"] = c
+        elif k in ["cost_code", "linked_cost_code", "costcode", "code"]:
+            colmap["linked_cost_code"] = c
+        elif k in ["project", "project_id", "project name", "projectname"]:
+            colmap["project_id"] = c
+        elif k in ["vendor", "vendor_name", "supplier", "supplier_name"]:
+            colmap["vendor_name"] = c
+        elif k in ["file", "file_link", "evidence", "link", "url"]:
+            colmap["file_link"] = c
+    out: List[Dict[str, Any]] = []
+    for _, r in df.iterrows():
+        item: Dict[str, Any] = {}
+        for k in SAFE_CO_COLS:
+            if k in colmap:
+                v = r[colmap[k]]
+                if pd.isna(v):
+                    v = None
+                item[k] = v
+            else:
+                item[k] = None
+        if item.get("amount_sar") is not None:
+            try:
+                item["amount_sar"] = float(str(item["amount_sar"]).replace(",", ""))
+            except Exception:
+                item["amount_sar"] = None
+        out.append(item)
+    return out
+
+
+def _rows_from_text(text: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not text.strip():
+        return rows
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        maybe_amount = None
+        for token in line.replace(",", "").split():
+            try:
+                val = float(token)
+                if val > 0:
+                    maybe_amount = val
+                    break
+            except Exception:
+                pass
+        item = {k: None for k in SAFE_CO_COLS}
+        item["description"] = line.strip()[:280]
+        item["amount_sar"] = maybe_amount
+        rows.append(item)
+    return rows
+
+
+@app.post("/extract/freeform")
+async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
+    """Accept CSV/XLSX/DOCX/PDF/TXT and return tolerant change-order like rows."""
+    all_rows: List[Dict[str, Any]] = []
+    for f in files:
+        data = await f.read()
+        name = f.filename or "upload.bin"
+        low = name.lower()
+        rows: List[Dict[str, Any]] = []
+        if any(low.endswith(ext) for ext in [".csv", ".xlsx", ".xls"]):
+            df = _df_from_bytes(name, data)
+            if not df.empty:
+                rows = _rows_from_tablelike(df)
+        elif any(low.endswith(ext) for ext in [".pdf", ".docx", ".txt", ".md", ".rtf"]):
+            text = _text_from_bytes(name, data)
+            rows = _rows_from_text(text)
+        else:
+            df = _df_from_bytes(name, data)
+            if not df.empty:
+                rows = _rows_from_tablelike(df)
+            else:
+                text = _text_from_bytes(name, data)
+                rows = _rows_from_text(text)
+        all_rows.extend(rows)
+    filtered = [r for r in all_rows if (r.get("description") or r.get("amount_sar") is not None)]
+    return {"rows": filtered, "count": len(filtered)}
 
 # Static UI for CEO
 try:

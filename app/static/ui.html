@@ -81,6 +81,19 @@
   <pre id="extractPreview" class="codebox" style="display:none;"></pre>
 </div>
 
+<div class="card" style="margin-top:18px;">
+  <h3>Free-form Source (CSV / Excel / Word / PDF / Text)</h3>
+  <p>Use this when your data is incomplete or doesn’t match the standard templates. 
+  The report below will be based solely on what exists in the file (no invention).</p>
+  <input id="freeform_files" type="file" multiple 
+         accept=".csv,.xlsx,.xls,.docx,.pdf,.txt,.md,.rtf" />
+  <div style="margin-top:10px;">
+    <button id="btn_freeform_preview">Pre-process free-form file(s)</button>
+    <button id="btn_freeform_generate">Generate from free-form only</button>
+  </div>
+  <pre id="freeform_preview" class="codebox" style="display:none;"></pre>
+</div>
+
 <div class="bar"><div class="fill" id="bar"></div></div>
 <div id="msg" class="muted"></div>
 <div id="err" style="color:#dc2626;font-size:0.9rem;margin-top:.25rem"></div>
@@ -201,7 +214,7 @@
       const out = {};
       Object.keys(r).forEach(k => { const t = mapKey(k); if (t) out[t] = (r[k] ?? '').toString().trim(); });
       return out;
-    }).filter(r => r.project_id && r.linked_cost_code && r.co_id && r.date && r.amount_sar);
+    });
   }
 
   function mapVendorMap(rows) {
@@ -311,6 +324,54 @@
     }
   }
   document.getElementById('btnExtract').addEventListener('click', extractProcurement);
+
+  async function postFiles(url, files) {
+    const fd = new FormData();
+    for (const f of files) fd.append('files', f);
+    const r = await fetch(url, { method: 'POST', body: fd });
+    if (!r.ok) { const t = await r.text(); throw new Error('API ' + r.status + ': ' + t); }
+    return r.json();
+  }
+
+  window.__free_rows__ = [];
+
+  async function doFreeformPreview() {
+    const inp = document.getElementById('freeform_files');
+    const box = document.getElementById('freeform_preview');
+    if (!inp.files.length) { box.style.display='block'; box.textContent='No files selected.'; return; }
+    const out = await postFiles('/extract/freeform', inp.files);
+    window.__free_rows__ = out.rows || [];
+    box.style.display='block';
+    box.textContent = JSON.stringify({rows: window.__free_rows__.slice(0,10), total: window.__free_rows__.length}, null, 2);
+  }
+
+  async function doFreeformGenerate() {
+    clearError();
+    const cfg = {
+      materiality_pct: Number(el('mat_pct').value || 5),
+      materiality_amount_sar: Number(el('mat_amt').value || 100000),
+      bilingual: el('bilingual').checked,
+      enforce_no_speculation: el('no_spec').checked,
+    };
+    const payload = {
+      budget_actuals: [],
+      change_orders: window.__free_rows__ || [],
+      vendor_map: [],
+      category_map: [],
+      config: cfg,
+    };
+    setMsg('Calling model (EN)'); setBar(75);
+    const data = await callDrafts(payload);
+    setBar(100); setMsg('Done');
+    el('out').textContent = JSON.stringify(data, null, 2);
+  }
+
+  document.getElementById('btn_freeform_preview').addEventListener('click', async () => {
+    try { await doFreeformPreview(); } catch(e) { showError(e.message); }
+  });
+  document.getElementById('btn_freeform_generate').addEventListener('click', async () => {
+    try { await doFreeformGenerate(); } catch(e) { setMsg('Error: '+e.message); setBar(0); }
+  });
 </script>
 
 <style>

@@ -15,10 +15,10 @@ class BudgetActualRow(BaseModel):
     remarks: Optional[str] = None
 
 class ChangeOrderRow(BaseModel):
-    project_id: str
-    co_id: str
-    date: str  # 'YYYY-MM-DD'
-    amount_sar: float
+    project_id: Optional[str] = None
+    co_id: Optional[str] = None            # was required → now optional
+    date: Optional[str] = None             # allow raw string date if that's what's in file/PDF
+    amount_sar: Optional[float] = None     # was required → now optional
     category: Optional[str] = None
     description: Optional[str] = None
     linked_cost_code: Optional[str] = None
