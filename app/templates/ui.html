@@ -104,11 +104,10 @@
 
     <div class="card">
       <div class="field">
-        <label>Procurement PDFs (optional)</label>
-        <input id="proc_pdfs" type="file" accept="application/pdf" multiple />
-        <div class="hint">Upload quotes/PRs. The app will extract amounts and descriptions that exist in the documents (no invention).</div>
-        <button id="btnExtract" class="btn" style="margin-top:8px">Pre-process PDFs</button>
-        <pre id="extractPreview" style="display:none"></pre>
+        <label>Single Data File (CSV, Excel, Word, PDF, or Text)</label>
+        <input id="fSingle" type="file" accept=".csv,.xlsx,.xls,.pdf,.docx,.txt,.md,.rtf" />
+        <div class="hint">Use this for incomplete or messy data in one file. Uploading here disables the 4-file track.</div>
+        <button id="btnSingle" class="btn" style="margin-top:8px">Generate from file</button>
       </div>
     </div>
 
@@ -318,28 +317,51 @@
     throw new Error('Unsupported file type: ' + ext);
   }
 
-  window.__proc_rows__ = [];
-
-  async function extractProcurement() {
-    const input = $('proc_pdfs');
-    if (!input.files.length) return;
-    const fd = new FormData();
-    for (const f of input.files) fd.append('files', f);
-    const res = await fetch('/extract/procurement', { method: 'POST', body: fd });
-    const j = await res.json();
-    if (j.ok) {
-      window.__proc_rows__ = (j.documents || []).flatMap(d => d.rows || []);
-      const box = $('extractPreview');
-      box.style.display = 'block';
-      box.textContent = JSON.stringify({ preview_count: window.__proc_rows__.length }, null, 2);
-    }
+  function trackToggle() {
+    const single = $('fSingle');
+    const others = ['fBudget','fCO','fVendor','fCat'].map(id => $(id));
+    const singleActive = single.files.length > 0;
+    others.forEach(inp => inp.disabled = singleActive);
+    single.disabled = others.some(inp => inp.files.length > 0);
   }
+  ['fSingle','fBudget','fCO','fVendor','fCat'].forEach(id => {
+    $(id).addEventListener('change', trackToggle);
+  });
+  trackToggle();
 
-  $('btnExtract').addEventListener('click', extractProcurement);
+  $('btnSingle').addEventListener('click', async () => {
+    try {
+      if (['fBudget','fCO','fVendor','fCat'].some(id => $(id).files.length)) {
+        setStatus('Clear the structured uploads to use the single file mode.', 'err');
+        return;
+      }
+      const f = $('fSingle').files[0];
+      if (!f) { setStatus('Please choose a file.', 'err'); return; }
+      setStatus('Uploading…'); setBar(25); $('btnSingle').disabled=true;
+      const fd = new FormData(); fd.append('data_file', f);
+      const resp = await fetch('/upload', { method:'POST', body: fd });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        setStatus('API error: ' + resp.status + ' ' + resp.statusText + '\n' + txt, 'err');
+        setBar(0); $('btnSingle').disabled=false; return;
+      }
+      const data = await resp.json();
+      setStatus('Done','ok'); setBar(100);
+      $('result').textContent = JSON.stringify(data,null,2);
+    } catch (err) {
+      setStatus(String(err && err.message ? err.message : err), 'err'); setBar(0);
+    } finally {
+      $('btnSingle').disabled=false; setTimeout(()=>setBar(0),1200);
+    }
+  });
 
   // ---------- Main click ----------
   $('btnGen').addEventListener('click', async () => {
     try {
+      if ($('fSingle').files.length) {
+        setStatus('Remove the single data file to use the structured track.', 'err');
+        return;
+      }
       setStatus('Reading files…'); setBar(10); $('btnGen').disabled = true;
 
       const [baRows, coRows, vmRows, cmRows] = await Promise.all([
@@ -353,7 +375,7 @@
 
       const payload = {
         budget_actuals: mapBudget(baRows),
-        change_orders:  mapChangeOrders(coRows).concat(window.__proc_rows__ || []),
+        change_orders:  mapChangeOrders(coRows),
         vendor_map:     mapVendors(vmRows),
         category_map:   mapCategories(cmRows),
         config: {

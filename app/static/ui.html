@@ -72,18 +72,9 @@
   <p class="muted">Tip: the uploader also accepts friendly headers <code>period(YYYY-MM)</code> and <code>date(YYYY-MM-DD)</code>; they'll be mapped automatically.</p>
 </div>
 
-<!-- ADD: new Procurement PDFs uploader and client-side call -->
-<div class="card">
-  <h3>Procurement PDFs (optional)</h3>
-  <input id="proc_pdfs" type="file" accept="application/pdf" multiple />
-  <small>Upload quotes/PRs. The app will extract amounts and descriptions that exist in the documents (no invention).</small>
-  <button id="btnExtract" class="btn btn-secondary">Pre-process PDFs</button>
-  <pre id="extractPreview" class="codebox" style="display:none;"></pre>
-</div>
-
 <div class="card" style="margin-top:18px;">
   <h3>Free-form Source (CSV / Excel / Word / PDF / Text)</h3>
-  <p>Use this when your data is incomplete or doesn’t match the standard templates. 
+  <p>Use this when your data is incomplete or doesn’t match the standard templates.
   The report below will be based solely on what exists in the file (no invention).</p>
   <input id="freeform_files" type="file" multiple 
          accept=".csv,.xlsx,.xls,.docx,.pdf,.txt,.md,.rtf" />
@@ -304,26 +295,6 @@
   }
 
   el('run_csv').onclick = onGenerateClicked;
-
-  async function extractProcurement() {
-    const input = document.getElementById('proc_pdfs');
-    if (!input.files.length) { return; }
-    const fd = new FormData();
-    for (const f of input.files) fd.append('files', f);
-    const r = await fetch('/extract/procurement', { method: 'POST', body: fd });
-    const j = await r.json();
-    // Merge extracted rows into a hidden textarea the existing "Generate" handler already uses
-    // by appending to the change_orders buffer (without touching other features)
-    if (j.ok) {
-      window.__proc_rows__ = (j.documents || []).flatMap(d => d.rows || []);
-      const prev = (window.__change_orders_from_csv__ || []);
-      window.__change_orders_from_csv__ = prev.concat(window.__proc_rows__);
-      const box = document.getElementById('extractPreview');
-      box.style.display = 'block';
-      box.textContent = JSON.stringify({preview_count: window.__proc_rows__.length}, null, 2);
-    }
-  }
-  document.getElementById('btnExtract').addEventListener('click', extractProcurement);
 
   async function postFiles(url, files) {
     const fd = new FormData();
