@@ -103,6 +103,16 @@
     </div>
 
     <div class="card">
+      <div class="field">
+        <label>Procurement PDFs (optional)</label>
+        <input id="proc_pdfs" type="file" accept="application/pdf" multiple />
+        <div class="hint">Upload quotes/PRs. The app will extract amounts and descriptions that exist in the documents (no invention).</div>
+        <button id="btnExtract" class="btn" style="margin-top:8px">Pre-process PDFs</button>
+        <pre id="extractPreview" style="display:none"></pre>
+      </div>
+    </div>
+
+    <div class="card">
       <div id="result"></div>
     </div>
   </div>
@@ -308,6 +318,25 @@
     throw new Error('Unsupported file type: ' + ext);
   }
 
+  window.__proc_rows__ = [];
+
+  async function extractProcurement() {
+    const input = $('proc_pdfs');
+    if (!input.files.length) return;
+    const fd = new FormData();
+    for (const f of input.files) fd.append('files', f);
+    const res = await fetch('/extract/procurement', { method: 'POST', body: fd });
+    const j = await res.json();
+    if (j.ok) {
+      window.__proc_rows__ = (j.documents || []).flatMap(d => d.rows || []);
+      const box = $('extractPreview');
+      box.style.display = 'block';
+      box.textContent = JSON.stringify({ preview_count: window.__proc_rows__.length }, null, 2);
+    }
+  }
+
+  $('btnExtract').addEventListener('click', extractProcurement);
+
   // ---------- Main click ----------
   $('btnGen').addEventListener('click', async () => {
     try {
@@ -324,7 +353,7 @@
 
       const payload = {
         budget_actuals: mapBudget(baRows),
-        change_orders:  mapChangeOrders(coRows),
+        change_orders:  mapChangeOrders(coRows).concat(window.__proc_rows__ || []),
         vendor_map:     mapVendors(vmRows),
         category_map:   mapCategories(cmRows),
         config: {
