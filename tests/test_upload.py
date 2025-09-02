@@ -108,3 +108,34 @@ def test_upload_mutual_exclusive():
         }
         resp = client.post("/upload", files=files, data={"api_key": "testkey"})
     assert resp.status_code == 400
+
+
+def test_pdf_fallback(monkeypatch):
+    client = TestClient(app)
+    monkeypatch.setattr("app.main.pdf_extract_text", lambda *a, **k: "")
+
+    class DummyPage:
+        def extract_text(self):
+            return "item a 100\nitem b 200"
+
+    class DummyPDF:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        @property
+        def pages(self):
+            return [DummyPage()]
+
+    import types
+
+    monkeypatch.setattr("app.main.pdfplumber", types.SimpleNamespace(open=lambda *a, **k: DummyPDF()))
+
+    files = {"data_file": ("test.pdf", b"%PDF-1.4", "application/pdf")}
+    resp = client.post("/upload", files=files, data={"api_key": "testkey"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    assert data["total_amount_sar"] == 300

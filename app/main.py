@@ -13,6 +13,10 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     pdf_extract_text = None
 try:
+    import pdfplumber
+except Exception:  # pragma: no cover - optional dependency
+    pdfplumber = None  # type: ignore
+try:
     import docx
 except Exception:  # pragma: no cover - optional dependency
     docx = None
@@ -65,11 +69,20 @@ def _df_from_bytes(name: str, data: bytes) -> pd.DataFrame:
 
 def _text_from_bytes(name: str, data: bytes) -> str:
     low = name.lower()
-    if low.endswith(".pdf") and pdf_extract_text:
-        try:
-            return pdf_extract_text(io.BytesIO(data)) or ""
-        except Exception:
-            return ""
+    if low.endswith(".pdf"):
+        text = ""
+        if pdf_extract_text:
+            try:
+                text = pdf_extract_text(io.BytesIO(data)) or ""
+            except Exception:
+                text = ""
+        if not text.strip() and pdfplumber:
+            try:
+                with pdfplumber.open(io.BytesIO(data)) as pdf:
+                    text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            except Exception:
+                text = ""
+        return text
     if low.endswith(".docx") and docx:
         try:
             d = docx.Document(io.BytesIO(data))
