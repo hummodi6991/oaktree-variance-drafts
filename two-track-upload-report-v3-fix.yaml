@@ -1,0 +1,268 @@
+name: two-track-upload-report-v3-fix
+label: "Two-Track Upload → Report (robust Track B)"
+description: >
+  Track A (4 files) OR Track B (1 flexible file). Track B is chunked for large PDFs,
+  filters irrelevant pages, and includes a fallback adapter that converts any `{rows}` JSON
+  into a normalized CSV before analysis. Evidence-only (no invention).
+
+ui:
+  layout: vertical
+  sections:
+    - id: track_a
+      label: "Track A — Structured (4 files)"
+      inputs:
+        - { id: file_budget_actuals,  type: file, label: "Budget & Actuals",  accept: [".csv",".xlsx"] }
+        - { id: file_forecast,        type: file, label: "Forecast",          accept: [".csv",".xlsx"] }
+        - { id: file_master_metrics,  type: file, label: "Master Metrics",    accept: [".csv",".xlsx"] }
+        - { id: file_mapping,         type: file, label: "Mappings",          accept: [".csv",".xlsx"] }
+      helpers: [{ type: note, text: "Mutually exclusive with Track B." }]
+
+    - id: track_b
+      label: "Track B — Flexible (CSV/XLSX/PDF/DOC/TXT)"
+      inputs:
+        - { id: file_flexible, type: file, label: "Single Flexible Upload",
+            accept: [".csv",".xlsx",".xls",".pdf",".doc",".docx",".txt",".md",".json"] }
+      helpers: [{ type: note, text: "Use for incomplete or messy single files." }]
+
+    - id: run
+      inputs:
+        - id: generate
+          type: button
+          label: "Generate"
+          style: primary
+          on_click: { action: run-two-track }
+
+actions:
+  - id: run-two-track
+    type: workflow
+    steps:
+      # --- exclusivity & routing ---
+      - id: exclusivity_check
+        type: branch
+        branches:
+          - when: >-
+              {{
+                inputs.file_flexible and
+                (inputs.file_budget_actuals or inputs.file_forecast or inputs.file_master_metrics or inputs.file_mapping)
+              }}
+            goto: exclusivity_error
+          - when: "{{ inputs.file_flexible }}"
+            goto: track_b_pipeline
+          - when: "{{ inputs.file_budget_actuals and inputs.file_forecast and inputs.file_master_metrics and inputs.file_mapping }}"
+            goto: track_a_pipeline
+          - else:
+            goto: missing_inputs_error
+
+      # ===================== TRACK B (robust) =====================
+      - id: track_b_pipeline
+        type: subworkflow
+        steps:
+          - id: inspect
+            type: file_inspect
+            file: "{{ inputs.file_flexible }}"
+
+          - id: route
+            type: branch
+            branches:
+              - when: "{{ inspect.outputs.mime != 'application/pdf' or (inspect.outputs.page_count|default(0)) <= 12 }}"
+                goto: direct_extract
+              - else:
+                goto: split_and_filter
+
+          # ---- small or non-PDF path ----
+          - id: direct_extract
+            type: llm_extract
+            model: "{{ env.OPENAI_MODEL_EXTRACT | default('gpt-4o') }}"
+            timeout_sec: 90
+            retry: { max: 2, backoff_sec: 2 }
+            files: ["{{ inputs.file_flexible }}"]
+            prompt: |
+              ROLE: Finance data wrangler.
+              OUTPUT FORMAT REQUIREMENT:
+                - Prefer returning "normalized_csv" (UTF-8 CSV string).
+                - If you must return JSON rows, return as { "rows":[ {...}, ... ] } with keys drawn from:
+                  ["description","qty","unit","unit_price_sar","line_total_sar","amount_sar","date"].
+              TASK:
+                • Extract ONLY real data; never invent.
+                • Prefer a clean items table with headers similar to:
+                  description, qty, unit, unit_price_sar, line_total_sar.
+                • Normalize numbers (strip currency symbols/commas).
+                • Drop decorative/header-only lines.
+              ALSO RETURN:
+                notes: bullets of assumptions + page/line/sheet refs.
+
+          # Fallback adapter: rows JSON -> CSV
+          - id: adapt_rows_to_csv
+            type: tabular_transform
+            code: |
+              CSV_TXT = direct_extract.outputs.normalized_csv
+              if CSV_TXT:
+                  T = READ_CSV(CSV_TXT)
+              else:
+                  ROWS = direct_extract.outputs.rows
+                  # Build table defensively from JSON rows
+                  if not ROWS:
+                      T = EMPTY_TABLE(columns=["description","qty","unit","unit_price_sar","line_total_sar"])
+                  else:
+                      T = FROM_JSON_ROWS(ROWS)
+                  # Keep only meaningful columns if present
+                  KEYS = [c for c in ["description","qty","unit","unit_price_sar","line_total_sar","amount_sar","date"] if c in T.columns]
+                  if KEYS:
+                      T = T[KEYS]
+              # Sanitize
+              T = STRIP_WHITESPACE(T)
+              T = DROP_EMPTY_ROWS(T, keep_if_any_of=["description","qty","unit","unit_price_sar","line_total_sar","amount_sar"])
+              T = COERCE_NUMERIC(T, cols=[c for c in ["qty","unit_price_sar","line_total_sar","amount_sar"] if c in T.columns])
+              if ("line_total_sar" not in T.columns) and ("qty" in T.columns) and ("unit_price_sar" in T.columns):
+                  T["line_total_sar"] = SAFE_MUL(T["qty"], T["unit_price_sar"])
+              OUT = T
+
+          - id: analyze_single
+            type: llm_analyze
+            model: "{{ env.OPENAI_MODEL_ANALYZE | default('gpt-4o') }}"
+            timeout_sec: 90
+            retry: { max: 2, backoff_sec: 2 }
+            inputs:
+              csv: "{{ steps.adapt_rows_to_csv.outputs.OUT }}"
+              notes: "{{ steps.direct_extract.outputs.notes }}"
+            prompt: |
+              ROLE: Procurement/variance analyst. Evidence-only.
+              Use numeric fields present to compute totals (prefer line_total_sar, else qty*unit_price_sar).
+              Summarize top line items and list data gaps & assumptions.
+              HARD RULES: No invention; only use values that exist.
+
+          - id: deliver_direct
+            type: result
+            outputs:
+              report_markdown: "{{ steps.analyze_single.outputs.text }}"
+              normalized_csv: "{{ steps.adapt_rows_to_csv.outputs.OUT }}"
+              data_notes: "{{ steps.direct_extract.outputs.notes }}"
+
+          # ---- large PDF path: split -> score -> select -> extract (uses same adapter) ----
+          - id: split_and_filter
+            type: document_split
+            file: "{{ inputs.file_flexible }}"
+            by: page
+            limit: 50
+
+          - id: score_pages
+            type: llm_extract
+            model: "{{ env.OPENAI_MODEL_SCREEN | default('gpt-4o-mini') }}"
+            timeout_sec: 60
+            retry: { max: 2, backoff_sec: 2 }
+            files: "{{ steps.split_and_filter.outputs.pages }}"
+            prompt: |
+              ROLE: Page screener.
+              Output JSON array: [{ "page": <index>, "keep": true|false, "reason": "…" }]
+              keep=true iff page contains a tabular items structure or numeric line items.
+              Exclude cover/signatures/terms-only/noisy pages.
+
+          - id: select_pages
+            type: file_select
+            from: "{{ steps.split_and_filter.outputs.pages }}"
+            where: "{{ steps.score_pages.outputs }}"
+
+          - id: batch_extract
+            type: llm_extract
+            model: "{{ env.OPENAI_MODEL_EXTRACT | default('gpt-4o') }}"
+            timeout_sec: 90
+            retry: { max: 2, backoff_sec: 2 }
+            files: "{{ steps.select_pages.outputs.files }}"
+            prompt: |
+              ROLE: Finance data wrangler.
+              Merge rows from all pages into either:
+                - normalized_csv (preferred), or
+                - { "rows": [...] } JSON (fallback).
+              Same headers & rules as above. Include notes with kept/ignored pages.
+
+          - id: batch_adapt
+            type: tabular_transform
+            code: |
+              CSV_TXT = batch_extract.outputs.normalized_csv
+              if CSV_TXT:
+                  T = READ_CSV(CSV_TXT)
+              else:
+                  ROWS = batch_extract.outputs.rows
+                  T = FROM_JSON_ROWS(ROWS) if ROWS else EMPTY_TABLE(columns=["description"])
+              T = STRIP_WHITESPACE(T)
+              T = DROP_EMPTY_ROWS(T, keep_if_any_of=["description","qty","unit","unit_price_sar","line_total_sar","amount_sar"])
+              T = COERCE_NUMERIC(T, cols=[c for c in ["qty","unit_price_sar","line_total_sar","amount_sar"] if c in T.columns])
+              if ("line_total_sar" not in T.columns) and ("qty" in T.columns) and ("unit_price_sar" in T.columns):
+                  T["line_total_sar"] = SAFE_MUL(T["qty"], T["unit_price_sar"])
+              OUT = T
+
+          - id: batch_analyze
+            type: llm_analyze
+            model: "{{ env.OPENAI_MODEL_ANALYZE | default('gpt-4o') }}"
+            timeout_sec: 90
+            retry: { max: 2, backoff_sec: 2 }
+            inputs:
+              csv: "{{ steps.batch_adapt.outputs.OUT }}"
+              notes: "{{ steps.batch_extract.outputs.notes }}"
+            prompt: |
+              ROLE: Procurement/variance analyst. Evidence-only.
+              Compute totals if amounts exist, else qualitative insights.
+              Include “Pages kept/ignored” from notes. No invention.
+
+          - id: deliver_batch
+            type: result
+            outputs:
+              report_markdown: "{{ steps.batch_analyze.outputs.text }}"
+              normalized_csv: "{{ steps.batch_adapt.outputs.OUT }}"
+              data_notes: "{{ steps.batch_extract.outputs.notes }}"
+
+      # ===================== TRACK A (unchanged) =====================
+      - id: track_a_pipeline
+        type: subworkflow
+        steps:
+          - id: load_csvs
+            type: tabular_load
+            files:
+              - { id: budget_actuals, file: "{{ inputs.file_budget_actuals }}" }
+              - { id: forecast,       file: "{{ inputs.file_forecast }}" }
+              - { id: master_metrics, file: "{{ inputs.file_master_metrics }}" }
+              - { id: mapping,        file: "{{ inputs.file_mapping }}" }
+          - id: compute_variance
+            type: tabular_transform
+            code: |
+              budget = FILTER(budget_actuals, type == "budget")
+              actual = FILTER(budget_actuals, type == "actual")
+              joined = JOIN(actual, budget, on=["period","account","cost_center"], how="inner", suffixes=("_actual","_budget"))
+              with_forecast = LEFT_JOIN(joined, forecast, on=["period","account","cost_center"])
+              OUT = with_forecast.assign(
+                variance_amount = if_present(amount_actual, amount_budget, amount_actual - amount_budget),
+                variance_pct    = if_present(amount_actual, amount_budget, safe_divide(amount_actual - amount_budget, NULLIFZERO(amount_budget)))
+              )
+          - id: summarize
+            type: llm_analyze
+            model: "{{ env.OPENAI_MODEL_ANALYZE | default('gpt-4o') }}"
+            inputs: { table: "{{ steps.compute_variance.outputs.OUT }}" }
+            prompt: "Evidence-only variance summary. No invention."
+          - id: deliver_a
+            type: result
+            outputs:
+              report_markdown: "{{ steps.summarize.outputs.text }}"
+              variance_table: "{{ steps.compute_variance.outputs.OUT }}"
+
+      # --- errors ---
+      - id: exclusivity_error
+        type: notify
+        level: error
+        message: "Track A and B are mutually exclusive. Upload either one flexible file OR all four structured files."
+      - id: missing_inputs_error
+        type: notify
+        level: warning
+        message: "Upload ALL FOUR files for Track A, or ONE flexible file for Track B."
+
+outputs:
+  - { id: report_markdown, label: "Report", type: markdown,
+      from: ["{{ steps.deliver_direct.outputs.report_markdown }}","{{ steps.deliver_batch.outputs.report_markdown }}","{{ steps.deliver_a.outputs.report_markdown }}"] }
+  - { id: normalized_csv, label: "Normalized Data (Track B)", type: file,
+      when: "{{ steps.deliver_direct.outputs.normalized_csv is present or steps.deliver_batch.outputs.normalized_csv is present }}",
+      from: "{{ steps.deliver_direct.outputs.normalized_csv or steps.deliver_batch.outputs.normalized_csv }}" }
+  - { id: data_notes, label: "Extraction Notes (Track B)", type: text,
+      when: "{{ steps.deliver_direct.outputs.data_notes is present or steps.deliver_batch.outputs.data_notes is present }}",
+      from: "{{ steps.deliver_direct.outputs.data_notes or steps.deliver_batch.outputs.data_notes }}" }
+  - { id: variance_table, label: "Variance Table (Track A)", type: table,
+      when: "{{ steps.deliver_a.outputs.variance_table is present }}",
+      from: "{{ steps.deliver_a.outputs.variance_table }}" }
