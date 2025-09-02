@@ -175,6 +175,18 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
         elif any(low.endswith(ext) for ext in [".pdf", ".docx", ".txt", ".md", ".rtf"]):
             text = _text_from_bytes(name, data)
             rows = _rows_from_text(text)
+            if not rows:
+                for it in extract_items_via_llm(text):
+                    rows.append({
+                        "project_id": None,
+                        "linked_cost_code": None,
+                        "description": it.get("description"),
+                        "file_link": None,
+                        "co_id": it.get("co_id"),
+                        "date": None,
+                        "amount_sar": it.get("amount_sar"),
+                        "vendor_name": None,
+                    })
         else:
             df = _df_from_bytes(name, data)
             if not df.empty:
@@ -182,6 +194,18 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
             else:
                 text = _text_from_bytes(name, data)
                 rows = _rows_from_text(text)
+                if not rows:
+                    for it in extract_items_via_llm(text):
+                        rows.append({
+                            "project_id": None,
+                            "linked_cost_code": None,
+                            "description": it.get("description"),
+                            "file_link": None,
+                            "co_id": it.get("co_id"),
+                            "date": None,
+                            "amount_sar": it.get("amount_sar"),
+                            "vendor_name": None,
+                        })
         all_rows.extend(rows)
     filtered = [r for r in all_rows if (r.get("description") or r.get("amount_sar") is not None)]
     return {"rows": filtered, "count": len(filtered)}

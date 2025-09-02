@@ -82,6 +82,44 @@ def attach_drivers_and_vendors(items: List[VarianceItem], change_orders: List[Ch
         v.evidence_links = evidence
         v.vendors = sorted(vend_set)
 
+
+def change_orders_to_variances(change_orders: List[ChangeOrderRow], cat_lu: Dict[str, str]) -> List[VarianceItem]:
+    """Fallback variance items derived directly from change orders.
+
+    When structured budget/actual rows are unavailable but change orders are
+    provided (e.g. free-form upload), treat each change order amount as a
+    variance against a zero budget. This enables downstream draft generation
+    rather than returning "no variance items found".
+    """
+    out: List[VarianceItem] = []
+    for co in change_orders:
+        if co.amount_sar is None:
+            continue
+        project_id = co.project_id or "Unknown"
+        period = (co.date or "1970-01-01")[:7]
+        category = co.category or cat_lu.get(co.linked_cost_code or "", "Uncategorized")
+        amount = float(co.amount_sar)
+        driver = co.description or (f"Change Order {co.co_id}" if co.co_id else "")
+        drivers = [driver] if driver else []
+        vn = getattr(co, "vendor_name", None)
+        vendors = [vn] if vn else []
+        evidence = [co.file_link] if co.file_link else []
+        out.append(
+            VarianceItem(
+                project_id=project_id,
+                period=period,
+                category=category,
+                budget_sar=0.0,
+                actual_sar=amount,
+                variance_sar=amount,
+                variance_pct=100.0 if amount else 0.0,
+                drivers=drivers,
+                vendors=vendors,
+                evidence_links=evidence,
+            )
+        )
+    return out
+
 def filter_materiality(items: List[VarianceItem], cfg: ConfigModel) -> List[VarianceItem]:
     return [v for v in items if abs(v.variance_pct) >= cfg.materiality_pct or abs(v.variance_sar) >= cfg.materiality_amount_sar]
 
@@ -100,7 +138,11 @@ def generate_drafts(
 
     progress_cb(25, "Computing variances")
     items = group_variances(req.budget_actuals, cat_lu)
-    attach_drivers_and_vendors(items, req.change_orders, req.vendor_map, cat_lu)
+    if items:
+        attach_drivers_and_vendors(items, req.change_orders, req.vendor_map, cat_lu)
+    elif req.change_orders:
+        # No structured budget/actual rows; derive variances directly from change orders
+        items = change_orders_to_variances(req.change_orders, cat_lu)
 
     progress_cb(55, "Preparing EN prompt")
     material = filter_materiality(items, req.config)

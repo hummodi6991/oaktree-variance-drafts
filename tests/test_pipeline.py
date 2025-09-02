@@ -6,6 +6,7 @@ from app.pipeline import (
     group_variances,
     attach_drivers_and_vendors,
     filter_materiality,
+    generate_drafts,
 )
 from app.schemas import (
     BudgetActualRow,
@@ -13,6 +14,7 @@ from app.schemas import (
     VendorMapRow,
     CategoryMapRow,
     ConfigModel,
+    DraftRequest,
 )
 
 
@@ -39,3 +41,30 @@ def test_pipeline_end_to_end():
     assert materials.variance_sar == 200000.0
     assert materials.drivers == ["CO-014: Façade upgrade"]
     assert materials.vendors == ["Al Noor Façade Systems LLC"]
+
+
+def test_generate_drafts_change_orders_only():
+    change_orders = [
+        ChangeOrderRow(
+            project_id="P1",
+            co_id="CO1",
+            date="2024-03-10",
+            amount_sar=150000,
+            description="Extra scope",
+            linked_cost_code="100-200",
+        )
+    ]
+    category_map = [CategoryMapRow(cost_code="100-200", category="Materials")]
+    req = DraftRequest(
+        budget_actuals=[],
+        change_orders=change_orders,
+        vendor_map=[],
+        category_map=category_map,
+        config=ConfigModel(materiality_pct=0, materiality_amount_sar=0),
+    )
+    drafts = generate_drafts(req)
+    assert len(drafts) == 1
+    v = drafts[0].variance
+    assert v.actual_sar == 150000.0
+    assert v.budget_sar == 0.0
+    assert v.category == "Materials"
