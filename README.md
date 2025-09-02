@@ -9,7 +9,9 @@
 The app supports two mutually-exclusive upload modes:
 
 - **Structured track** – provide four CSV/Excel files (budget–actuals, change orders, vendor map, category map).
-- **Freeform track** – provide a single CSV/Excel/Word/PDF/text file. The app will attempt to extract rows and totals using deterministic parsing with an LLM fallback.
+- **Freeform track** – provide a single CSV/Excel/Word/PDF/text file. The app will attempt to extract rows and totals using deterministic parsing with ChatGPT assistance.
+
+ChatGPT is used both to process uploaded data and to draft the variance explanations, but prompts enforce a strict no‑invention policy so outputs remain grounded in the provided evidence.
 
 ## Run
 ```
