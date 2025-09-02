@@ -22,6 +22,8 @@ from pydantic import BaseModel
 from .schemas import DraftRequest, DraftResponse
 from .pipeline import generate_drafts
 from .services.csv_loader import parse_tabular
+from .parsers.procurement_pdf import parse_procurement_pdf
+from .llm.extract_from_text import extract_items_via_llm
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
 
@@ -67,6 +69,41 @@ def diag_openai():
         return {"ok": True, "model": model, "latency_ms": ms, "id": getattr(resp, "id", None)}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "model": model, "error": str(e)})
+
+
+# Procurement PDF extraction
+@app.post("/extract/procurement")
+async def extract_procurement(files: list[UploadFile] = File(...)) -> dict:
+    """
+    Accepts one or more procurement PDFs. Returns structured rows suitable
+    for change_orders. No fabrication: fields not present remain null.
+    """
+    results = []
+    for f in files:
+        data = await f.read()
+        file_url = None  # If you store uploads, set a URL here
+        parsed = parse_procurement_pdf(data, file_url=file_url)
+        rows = parsed["rows"]
+
+        # Fallback to LLM if deterministic rows look empty
+        if not rows or all(not r.get("description") and not r.get("amount_sar") for r in rows):
+            llm_rows = extract_items_via_llm(parsed["raw_preview"])
+            for it in llm_rows:
+                rows.append({
+                    "project_id": None,
+                    "linked_cost_code": None,
+                    "description": it.get("description"),
+                    "file_link": file_url,
+                    "co_id": it.get("co_id"),
+                    "date": parsed["meta"].get("doc_date"),
+                    "amount_sar": it.get("amount_sar"),
+                    "vendor_name": parsed["meta"].get("vendor_name"),
+                    "qty": it.get("qty"),
+                    "unit_price_sar": it.get("unit_price_sar"),
+                    "source": "procurement_pdf_llm"
+                })
+        results.append({"filename": f.filename, "meta": parsed["meta"], "rows": rows})
+    return {"ok": True, "documents": results}
 
 
 # -------- Job tracking --------
