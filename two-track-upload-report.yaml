@@ -1,0 +1,320 @@
+name: two-track-upload-report
+label: "Two-Track Upload → Automated Report"
+description: >
+  Two mutually-exclusive execution tracks:
+  (A) Four structured uploads (Budget/Actuals, Forecast, Master Metrics, Mappings)
+  OR
+  (B) Single flexible upload for messy/incomplete files.
+  In both tracks, LLM-assisted extraction may be used to parse and normalize data,
+  but the system MUST NOT invent facts or output metrics not present in the data.
+
+ui:
+  layout: vertical
+  sections:
+    - id: four_box_track
+      label: "Track A — Structured (4 files) [Mutually Exclusive]"
+      description: "Upload clean, metric-aligned files. If you use this, do NOT use Track B."
+      inputs:
+        - id: file_budget_actuals
+          type: file
+          label: "Budget & Actuals (CSV/XLSX)"
+          accept: [".csv", ".xlsx"]
+          required: false
+        - id: file_forecast
+          type: file
+          label: "Forecast (CSV/XLSX)"
+          accept: [".csv", ".xlsx"]
+          required: false
+        - id: file_master_metrics
+          type: file
+          label: "Master Metrics / Dimensions (CSV/XLSX)"
+          accept: [".csv", ".xlsx"]
+          required: false
+        - id: file_mapping
+          type: file
+          label: "Mappings (accounts, cost centers, etc.) (CSV/XLSX)"
+          accept: [".csv", ".xlsx"]
+          required: false
+      helpers:
+        - type: note
+          text: "Mutually exclusive with Track B. If you plan to use Track B, leave these empty."
+
+    - id: fifth_box_track
+      label: "Track B — Flexible (1 file, any format) [Mutually Exclusive]"
+      description: >
+        Upload a single file (even if incomplete or messy). The app will extract
+        what it can and generate a report solely from this file. If you use this, do NOT use Track A.
+      inputs:
+        - id: file_flexible
+          type: file
+          label: "Single Flexible Upload"
+          accept: [".csv", ".xlsx", ".xls", ".txt", ".md", ".json", ".pdf", ".doc", ".docx"]
+          required: false
+      helpers:
+        - type: note
+          text: "Dedicated to non-standard or incomplete files. Mutually exclusive with Track A."
+
+    - id: run_section
+      inputs:
+        - id: run_button
+          type: button
+          label: "Generate Report"
+          style: primary
+          on_click:
+            action: run-two-track-pipeline
+
+logic:
+  # Execution policy (mutual exclusivity + precedence rules):
+  # - If both any Track A files AND the Track B file are present -> error (cannot run both).
+  # - Else if Track B file is present -> run Track B (single-file pipeline).
+  # - Else if ALL four Track A files are present -> run Track A (structured pipeline).
+  # - Else -> instruct user to either complete Track A or use Track B.
+
+actions:
+  - id: run-two-track-pipeline
+    type: workflow
+    steps:
+      - id: detect_conflict
+        type: branch
+        branches:
+          - when: >-
+              {{
+                (inputs.file_flexible)
+                and
+                (inputs.file_budget_actuals or inputs.file_forecast or inputs.file_master_metrics or inputs.file_mapping)
+              }}
+            goto: exclusivity_error
+          - when: "{{ inputs.file_flexible }}"
+            goto: run_track_b_single_file
+          - when: "{{ inputs.file_budget_actuals and inputs.file_forecast and inputs.file_master_metrics and inputs.file_mapping }}"
+            goto: run_track_a_four_files
+          - else:
+            goto: missing_inputs_error
+
+      # ======== Track B: Single flexible file (LLM-assisted extraction; no invention) ========
+      - id: run_track_b_single_file
+        type: subworkflow
+        steps:
+          - id: extract_from_single
+            type: llm_extract
+            model: gpt-4o
+            files:
+              - "{{ inputs.file_flexible }}"
+            prompt: |
+              ROLE: Finance data wrangler.
+              INPUT: One file (PDF/Word/CSV/Excel/Text/JSON). May be incomplete or messy.
+              TASK:
+                1) Parse the file and IDENTIFY ONLY WHAT EXISTS in the data: budget, actuals, forecast, mappings, dimensions.
+                2) Normalize columns to: period, cost_center, account, metric, amount, currency, source.
+                3) If headers/units are unclear, propose best-fit mappings BUT FLAG them as assumptions.
+                4) DO NOT INVENT rows, periods, accounts, or amounts. If a value is missing, leave it blank and note it.
+                5) Return:
+                   - normalized_csv (strictly derived from the file’s content)
+                   - notes: assumptions, gaps, and data quality flags with explicit citations (page/line/sheet/column).
+
+          - id: enhance_single_with_llm_checks
+            type: llm_analyze
+            model: gpt-4o
+            inputs:
+              csv: "{{ steps.extract_from_single.outputs.normalized_csv }}"
+              notes: "{{ steps.extract_from_single.outputs.notes }}"
+            prompt: |
+              ROLE: Variance analyst & auditor.
+              Using the normalized CSV and notes:
+                - Compute totals by period/account/cost_center where present.
+                - If BOTH budget and actuals exist, compute variance (absolute and %) ONLY for rows that have both.
+                - If only one side exists (e.g., only actuals), summarize top spends/trends without fabricating budget/forecast.
+                - Cross-check for impossible values or mismatched units and flag in “Data Quality”.
+                - Provide an Executive Summary, Key Tables, and Data Quality & Assumptions.
+              HARD RULES:
+                - No hallucinations or inventions. No synthetic data. All statements must be traceable to the CSV/notes.
+
+          - id: deliver_single
+            type: result
+            outputs:
+              report_markdown: "{{ steps.enhance_single_with_llm_checks.outputs.text }}"
+              normalized_csv: "{{ steps.extract_from_single.outputs.normalized_csv }}"
+              data_notes: "{{ steps.extract_from_single.outputs.notes }}"
+
+      # ======== Track A: Four structured files (LLM-assisted harmonization; no invention) ========
+      - id: run_track_a_four_files
+        type: subworkflow
+        steps:
+          - id: load_csvs
+            type: tabular_load
+            files:
+              - id: budget_actuals
+                file: "{{ inputs.file_budget_actuals }}"
+              - id: forecast
+                file: "{{ inputs.file_forecast }}"
+              - id: master_metrics
+                file: "{{ inputs.file_master_metrics }}"
+              - id: mapping
+                file: "{{ inputs.file_mapping }}"
+
+          # NEW: LLM-assisted schema harmonization & header mapping (without invention)
+          - id: llm_harmonize_headers
+            type: llm_extract
+            model: gpt-4o
+            files:
+              - "{{ inputs.file_budget_actuals }}"
+              - "{{ inputs.file_forecast }}"
+              - "{{ inputs.file_master_metrics }}"
+              - "{{ inputs.file_mapping }}"
+            prompt: |
+              ROLE: Data model harmonizer.
+              TASK:
+                - Map source headers to canonical: period, account, cost_center, amount, type, forecast_amount, currency, source.
+                - Produce a mapping dictionary per file (source_header -> canonical_header).
+                - Identify units, date formats, and any dimension keys.
+                - DO NOT fabricate columns. If a canonical field is absent, mark as "absent".
+              OUTPUTS:
+                - header_mappings (per file)
+                - harmonization_notes with explicit references (sheet/column names).
+
+          - id: apply_header_mapping
+            type: tabular_transform
+            code: |
+              # Pseudocode: apply header_mappings to each loaded table
+              OUT_budget_actuals = APPLY_HEADERS(budget_actuals, header_mappings['budget_actuals'])
+              OUT_forecast       = APPLY_HEADERS(forecast, header_mappings['forecast'])
+              OUT_master         = APPLY_HEADERS(master_metrics, header_mappings['master_metrics'])
+              OUT_mapping        = APPLY_HEADERS(mapping, header_mappings['mapping'])
+
+          - id: validate_shape
+            type: tabular_validate
+            rules:
+              - ensure_columns_any_of:
+                  table: OUT_budget_actuals
+                  sets:
+                    - ["period","account","cost_center","amount","type"]
+                    - ["Period","Account","Cost Center","Amount","Type"]
+              - ensure_columns_any_of:
+                  table: OUT_forecast
+                  sets:
+                    - ["period","account","cost_center","forecast_amount"]
+                    - ["Period","Account","Cost Center","Forecast Amount"]
+              - soft_warn_missing: true
+
+          # Optional LLM data cleaning (strictly evidence-based)
+          - id: llm_clean_transform
+            type: llm_analyze
+            model: gpt-4o
+            inputs:
+              budget_actuals_preview: "{{ steps.apply_header_mapping.outputs.OUT_budget_actuals | head(1000) }}"
+              forecast_preview: "{{ steps.apply_header_mapping.outputs.OUT_forecast | head(1000) }}"
+              notes: "{{ steps.llm_harmonize_headers.outputs.harmonization_notes }}"
+            prompt: |
+              ROLE: Data cleaner.
+              TASK:
+                - Suggest NON-DESTRUCTIVE normalizations (date parsing, trimming whitespace, obvious currency symbol removal).
+                - Identify duplicates and obvious join keys.
+                - DO NOT fill in missing values with guesses. Only annotate where filling would be needed.
+              OUTPUT:
+                - cleaning_suggestions (bullets)
+                - join_keys suggestion
+
+          - id: compute_variance
+            type: tabular_transform
+            code: |
+              # Python-like pseudocode guarded against missing data:
+              # Split budget vs actual
+              budget = FILTER(OUT_budget_actuals, type == "budget")
+              actual = FILTER(OUT_budget_actuals, type == "actual")
+              # Safe join on suggested keys (fallback to period,account,cost_center)
+              keys = llm_clean_transform.outputs.join_keys or ["period","account","cost_center"]
+              joined = JOIN(actual, budget, on=keys, how="inner", suffixes=("_actual","_budget"))
+              with_forecast = LEFT_JOIN(joined, OUT_forecast, on=keys)
+              # Compute variances only where both numbers exist
+              with_variance = with_forecast.assign(
+                variance_amount = if_present(amount_actual, amount_budget, amount_actual - amount_budget),
+                variance_pct    = if_present(amount_actual, amount_budget,
+                                             safe_divide(amount_actual - amount_budget, NULLIFZERO(amount_budget)))
+              )
+
+              # Enrich with master/mapping if present (left joins; no invented values)
+              enriched = LEFT_JOIN(with_variance, OUT_master,  on=keys)
+              enriched = LEFT_JOIN(enriched,       OUT_mapping, on=keys)
+              OUT = enriched
+
+          # LLM-assisted summarization with strict no-invention policy
+          - id: summarize
+            type: llm_analyze
+            model: gpt-4o
+            inputs:
+              table: "{{ steps.compute_variance.outputs.OUT }}"
+              cleaning_suggestions: "{{ steps.llm_clean_transform.outputs.cleaning_suggestions }}"
+              harmonization_notes: "{{ steps.llm_harmonize_headers.outputs.harmonization_notes }}"
+            prompt: |
+              ROLE: Variance analyst.
+              Produce:
+                1) Executive Summary (evidence-based only).
+                2) Top 10 unfavorable variances (amount & %) where both actual and budget exist.
+                3) Top 10 favorable variances.
+                4) Period trends (only for periods present).
+                5) Segment insights by cost center/account where data supports it.
+                6) Data Quality & Assumptions, including harmonization & cleaning notes.
+              HARD RULES:
+                - Do NOT fabricate or infer missing data.
+                - If a field is absent, state it as absent and proceed with available evidence.
+                - All insights must be traceable to rows in the provided tables.
+
+          - id: deliver_structured
+            type: result
+            outputs:
+              report_markdown: "{{ steps.summarize.outputs.text }}"
+              variance_table: "{{ steps.compute_variance.outputs.OUT }}"
+              cleaning_suggestions: "{{ steps.llm_clean_transform.outputs.cleaning_suggestions }}"
+              harmonization_notes: "{{ steps.llm_harmonize_headers.outputs.harmonization_notes }}"
+
+      # ======== Error paths ========
+      - id: exclusivity_error
+        type: notify
+        level: error
+        message: >
+          Track A and Track B are MUTUALLY EXCLUSIVE. You uploaded files to both.
+          Please EITHER upload the single flexible file in Track B OR the four files in Track A, not both.
+
+      - id: missing_inputs_error
+        type: notify
+        level: warning
+        message: >
+          Please either (1) upload ALL FOUR files in Track A, or (2) use the single flexible file in Track B.
+          The flexible box accepts CSV, Excel, Word, PDF, or text—even if the data is incomplete.
+
+outputs:
+  - id: report_markdown
+    label: "Report"
+    type: markdown
+    from:
+      - "{{ steps.deliver_single.outputs.report_markdown }}"
+      - "{{ steps.deliver_structured.outputs.report_markdown }}"
+
+  - id: normalized_csv
+    label: "Normalized Data (if Track B)"
+    type: file
+    when: "{{ steps.deliver_single.outputs.normalized_csv is present }}"
+    from: "{{ steps.deliver_single.outputs.normalized_csv }}"
+
+  - id: data_notes
+    label: "Extraction Notes (if Track B)"
+    type: text
+    when: "{{ steps.deliver_single.outputs.data_notes is present }}"
+    from: "{{ steps.deliver_single.outputs.data_notes }}"
+
+  - id: variance_table
+    label: "Variance Table (if Track A)"
+    type: table
+    when: "{{ steps.deliver_structured.outputs.variance_table is present }}"
+    from: "{{ steps.deliver_structured.outputs.variance_table }}"
+
+  - id: audit_trail
+    label: "Audit Trail (Harmonization & Cleaning) (if Track A)"
+    type: text
+    when: "{{ steps.deliver_structured.outputs.harmonization_notes is present }}"
+    from: |
+      ## Harmonization Notes
+      {{ steps.deliver_structured.outputs.harmonization_notes }}
+
+      ## Cleaning Suggestions
+      {{ steps.deliver_structured.outputs.cleaning_suggestions }}
