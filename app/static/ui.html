@@ -318,6 +318,11 @@
 
   async function doFreeformGenerate() {
     clearError();
+    const inp = document.getElementById('freeform_files');
+    if (!window.__free_rows__.length && inp.files.length) {
+      const out = await postFiles('/extract/freeform', inp.files);
+      window.__free_rows__ = out.rows || [];
+    }
     const cfg = {
       materiality_pct: Number(el('mat_pct').value || 5),
       materiality_amount_sar: Number(el('mat_amt').value || 100000),
