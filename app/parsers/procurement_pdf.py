@@ -3,6 +3,11 @@ import io
 from pdfminer.high_level import extract_text
 import re
 
+# Fallback: detect unlabeled "qty unit_price total" rows
+ROW_TRIPLET = re.compile(
+    r"\b(\d{1,3})\s+([0-9]{1,3}(?:[, ]\d{3})*(?:\.\d+)?)\s+([0-9]{1,3}(?:[, ]\d{3})*(?:\.\d+)?)\b"
+)
+
 RE_DATE = re.compile(r'\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|(?:\d{4}-\d{2}-\d{2}))\b')
 RE_ITEM = re.compile(r'\b(D0?\d|Item\s*No\.?\s*:?\s*\d+)\b', re.I)
 RE_QTY = re.compile(r'\b(?:QTY|Quantity)\s*[:=]?\s*(\d+(?:\.\d+)?)', re.I)
@@ -82,4 +87,17 @@ def parse_procurement_pdf(pdf_bytes: bytes) -> Dict[str, Any]:
             "source": "uploaded_file",
         })
 
+    # NEW: if no labeled rows were captured, fall back to unlabeled triplets
+    if not items:
+        for q, up, amt in ROW_TRIPLET.findall(text):
+            items.append({
+                "item_code": None,
+                "description": None,
+                "qty": _num(q),
+                "unit_price_sar": _num(up),
+                "amount_sar": _num(amt),
+                "vendor_name": vendor,
+                "doc_date": date,
+                "source": "uploaded_file",
+            })
     return {"items": items, "meta": {"vendor_name": vendor, "doc_date": date}}
