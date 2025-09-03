@@ -1,156 +1,183 @@
-from typing import Dict, Any, List, Optional
-import io
-import re
+from __future__ import annotations
+import io, re, json, csv
+from typing import Dict, Any, List, Tuple
+import chardet
 import pandas as pd
+from pypdf import PdfReader
+import pdfplumber
+from docx import Document
 
-# --- Helpers: tolerant column detection & coercion ---
+REQUIRED_VARIANCE_HINTS = ("budget", "actual")
 
-_BUDGET_SYNONYMS = [
-    "budget", "budget_sar", "planned", "plan", "estimate", "estimated", "boq_budget",
-    "original_budget", "revised_budget"
-]
-_ACTUAL_SYNONYMS = [
-    "actual", "actual_sar", "spent", "cost", "paid", "invoice_total", "ytd_actual",
-    "accrual", "expended"
-]
-_PERIOD_SYNONYMS = ["period", "month", "posting_period", "date"]
-_COST_CODE_SYNONYMS = ["cost_code", "code", "account", "line_code"]
-_CATEGORY_SYNONYMS = ["category", "cost_category", "trade"]
-_PROJECT_SYNONYMS = ["project_id", "project", "project_name"]
 
-def _norm(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", s.strip().lower())
+def _read_csv_bytes(b: bytes) -> pd.DataFrame:
+    enc = chardet.detect(b).get("encoding") or "utf-8"
+    return pd.read_csv(io.BytesIO(b), encoding=enc)
 
-def _find_col(cols: List[str], candidates: List[str]) -> Optional[str]:
-    norm_map = {c: _norm(c) for c in cols}
-    for cand in candidates:
-        c_norm = _norm(cand)
-        for col, ncol in norm_map.items():
-            if ncol == c_norm or ncol.endswith("_" + c_norm) or c_norm in ncol:
-                return col
-    return None
 
-def _coerce_number(series: pd.Series) -> pd.Series:
-    # Remove currency words/symbols and thousands separators
-    s = series.astype(str).str.replace(r"[^\d\-\.\,]", "", regex=True)
-    # If commas abound and dots are few, treat comma as thousands sep
-    s = s.str.replace(",", "", regex=False)
-    return pd.to_numeric(s, errors="coerce").fillna(0.0)
+def _read_excel_bytes(b: bytes) -> pd.DataFrame:
+    return pd.read_excel(io.BytesIO(b), engine="openpyxl")
 
-def _first_nonempty(series: pd.Series) -> Optional[str]:
-    for v in series.astype(str):
-        vv = v.strip()
-        if vv:
-            return vv
-    return None
 
-def detect_and_compute_variances(df: pd.DataFrame) -> Dict[str, Any]:
-    cols = list(df.columns)
-    bcol = _find_col(cols, _BUDGET_SYNONYMS)
-    acol = _find_col(cols, _ACTUAL_SYNONYMS)
-    if not bcol or not acol:
-        return {
-            "mode": "summary_only",
-            "reason": "budget_or_actual_missing",
-            "columns_seen": cols,
-        }
+def _read_docx_bytes(b: bytes) -> str:
+    fp = io.BytesIO(b)
+    doc = Document(fp)
+    return "\n".join(p.text for p in doc.paragraphs)
 
-    # Optional grouping columns
-    pcol = _find_col(cols, _PROJECT_SYNONYMS)
-    percol = _find_col(cols, _PERIOD_SYNONYMS)
-    codecol = _find_col(cols, _COST_CODE_SYNONYMS)
-    catcol = _find_col(cols, _CATEGORY_SYNONYMS)
 
-    work = df.copy()
-    work["_budget"] = _coerce_number(work[bcol])
-    work["_actual"] = _coerce_number(work[acol])
-    work["_variance"] = work["_actual"] - work["_budget"]
-    work["_variance_pct"] = work.apply(
-        lambda r: (r["_variance"] / r["_budget"] * 100.0) if r["_budget"] else 0.0,
-        axis=1
-    )
+def _read_pdf_text(b: bytes) -> str:
+    # try structured text first
+    try:
+        with pdfplumber.open(io.BytesIO(b)) as pdf:
+            return "\n".join(p.extract_text() or "" for p in pdf.pages)
+    except Exception:
+        # simple fallback
+        rd = PdfReader(io.BytesIO(b))
+        return "\n".join(p.extract_text() or "" for p in rd.pages)
 
-    group_cols = [c for c in [pcol, percol, codecol, catcol] if c]
-    if group_cols:
-        agg = (work
-               .groupby(group_cols, dropna=False)[["_budget", "_actual", "_variance"]]
-               .sum()
-               .reset_index())
-        agg["_variance_pct"] = agg.apply(
-            lambda r: (r["_variance"] / r["_budget"] * 100.0) if r["_budget"] else 0.0,
-            axis=1
-        )
-        rows = []
-        for _, r in agg.iterrows():
-            rows.append({
-                "project_id": (r.get(pcol) if pcol else None),
-                "period": (r.get(percol) if percol else None),
-                "cost_code": (r.get(codecol) if codecol else None),
-                "category": (r.get(catcol) if catcol else None),
-                "budget_sar": float(r["_budget"]),
-                "actual_sar": float(r["_actual"]),
-                "variance_sar": float(r["_variance"]),
-                "variance_pct": float(r["_variance_pct"]),
-            })
+
+def _maybe_variance_from_tabular(df: pd.DataFrame) -> Dict[str, Any] | None:
+    # very tolerant: lower, strip, underscore columns
+    def norm(c: str) -> str:
+        return re.sub(r"\W+", "_", str(c).strip().lower())
+    df = df.rename(columns={c: norm(c) for c in df.columns})
+    cols = set(df.columns)
+    has_budget = any("budget" in c for c in cols)
+    has_actual = any("actual" in c for c in cols)
+    if not (has_budget and has_actual):
+        return None
+
+    # pick first matching columns
+    budget_col = next(c for c in df.columns if "budget" in c)
+    actual_col = next(c for c in df.columns if "actual" in c)
+    # group by best-available key: cost_code, category, or project_id
+    for key in ("cost_code", "category", "project_id"):
+        if key in df.columns:
+            group_key = key
+            break
     else:
-        r = work[["_budget", "_actual", "_variance"]].sum()
-        var_pct = float((r["_variance"] / r["_budget"] * 100.0) if r["_budget"] else 0.0)
-        rows = [{
-            "project_id": None,
-            "period": None,
-            "cost_code": None,
-            "category": None,
-            "budget_sar": float(r["_budget"]),
-            "actual_sar": float(r["_actual"]),
-            "variance_sar": float(r["_variance"]),
-            "variance_pct": var_pct,
-        }]
+        group_key = None
 
+    if group_key:
+        g = df.groupby(group_key, dropna=False)[[budget_col, actual_col]].sum().reset_index()
+    else:
+        g = df[[budget_col, actual_col]].sum().to_frame().T
+        g.insert(0, "label", "Total")
+        group_key = "label"
+
+    g["variance_sar"] = g[actual_col] - g[budget_col]
+    g["variance_pct"] = (g["variance_sar"] / g[budget_col].replace(0, pd.NA)) * 100
+    items = []
+    for _, r in g.fillna(0).iterrows():
+        items.append({
+            "label": r[group_key],
+            "budget_sar": float(r[budget_col]),
+            "actual_sar": float(r[actual_col]),
+            "variance_sar": float(r["variance_sar"]),
+            "variance_pct": float(r["variance_pct"]) if r["variance_pct"] == r["variance_pct"] else None,
+        })
+    return {"mode": "variance", "items": items}
+
+
+_RE_ITEM = re.compile(r"\b(D0?\d)\b", re.I)
+_RE_QTY = re.compile(r"\b(\d{1,4})\s*(pcs|sets?)\b", re.I)
+_RE_UNIT = re.compile(r"(?:unit\s*price|u\.?\s*rate)\D+([\d,]+\.\d{2}|\d{1,7})", re.I)
+_RE_TOTAL = re.compile(r"(?:total(?:\s*in\s*sar)?|amount)\D+([\d,]+\.\d{2}|\d{1,9})", re.I)
+_RE_VAT = re.compile(r"\bVAT\b.*?(\d{1,2})\s*%|\bTotal with Vat\b.*?([\d,]+\.\d{2})", re.I)
+_RE_VENDOR = re.compile(r"(Admark Creative Co\.|Al Azal(?: Est\.?)?|Woodwork Arts|Modern Furnishing House|Burj[^\n]*Ekha|ALAM)", re.I)
+_RE_DATE = re.compile(r"\b(?:Date|DATE)\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\-\d{1,2}\-\d{4})")
+
+
+def _procurement_from_text(txt: str) -> Dict[str, Any] | None:
+    # Extract vendor quotes and line items D01..Dxx with qty/unit/total
+    vendor = None
+    date = None
+    items: List[Dict[str, Any]] = []
+    for line in txt.splitlines():
+        if not vendor:
+            m = _RE_VENDOR.search(line)
+            if m:
+                vendor = m.group(1).strip()
+        if not date:
+            m = _RE_DATE.search(line)
+            if m:
+                date = m.group(1)
+
+        code = None
+        m = _RE_ITEM.search(line)
+        if m:
+            code = m.group(1).upper()
+
+        qty = None
+        m = _RE_QTY.search(line)
+        if m:
+            qty = int(m.group(1))
+
+        unit = None
+        m = _RE_UNIT.search(line)
+        if m:
+            unit = float(str(m.group(1)).replace(",", ""))
+
+        total = None
+        m = _RE_TOTAL.search(line)
+        if m:
+            total = float(str(m.group(1)).replace(",", ""))
+
+        if code or qty or unit or total:
+            items.append(
+                {
+                    "item_code": code,
+                    "qty": qty,
+                    "unit_price_sar": unit,
+                    "amount_sar": total,
+                }
+            )
+
+    items = [i for i in items if any(v is not None for v in i.values())]
+    if not items and not vendor:
+        return None
     return {
-        "mode": "variance",
-        "items": rows,
-        "columns_used": {"budget": bcol, "actual": acol, "project": pcol,
-                         "period": percol, "cost_code": codecol, "category": catcol},
+        "mode": "procurement",
+        "doc_date": date,
+        "vendor_name": vendor,
+        "items": items,
     }
 
-def summarize_only(df: pd.DataFrame) -> Dict[str, Any]:
-    # Provide a very light summary for files without budget/actual
-    cols = list(df.columns)
-    sample = df.head(5).to_dict(orient="records")
-    return {
-        "mode": "summary_only",
-        "reason": "no_budget_actual_detected",
-        "columns_seen": cols,
-        "sample_rows": sample,
-        "row_count": int(df.shape[0]),
-    }
 
-def parse_single_file(content: bytes, filename: str) -> Dict[str, Any]:
-    """
-    Accepts CSV/Excel/Text. (PDF/Word are handled upstream before calling this.)
-    Tries to compute variances if both budget & actual columns exist; otherwise returns a summary.
-    """
-    name = filename.lower()
+def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
+    name = (filename or "").lower()
+    # CSV/Excel first (variance track if possible)
     try:
         if name.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(content))
-        elif name.endswith(".xlsx") or name.endswith(".xls"):
-            df = pd.read_excel(io.BytesIO(content))
-        else:
-            # generic text/tsv
-            df = pd.read_csv(io.BytesIO(content), sep=None, engine="python")
+            df = _read_csv_bytes(data)
+            v = _maybe_variance_from_tabular(df)
+            if v:
+                return v
+        elif name.endswith((".xlsx", ".xls")):
+            df = _read_excel_bytes(data)
+            v = _maybe_variance_from_tabular(df)
+            if v:
+                return v
     except Exception:
-        # last resort: try to read as free-form text into one column
-        text = content.decode("utf-8", errors="ignore")
-        lines = [line for line in text.splitlines() if line.strip()]
-        df = pd.DataFrame({"text": lines})
+        pass
 
-    # Strip spaces from headers
-    df.columns = [c.strip() for c in df.columns]
-
-    outcome = detect_and_compute_variances(df)
-    if outcome.get("mode") == "variance":
-        return {"ok": True, "result": outcome}
+    # DOCX/PDF/TXT => procurement or general summary
+    if name.endswith(".docx"):
+        txt = _read_docx_bytes(data)
+    elif name.endswith(".pdf"):
+        txt = _read_pdf_text(data)
     else:
-        # no budget/actual — just summarize
-        return {"ok": True, "result": summarize_only(df)}
+        # text-like
+        try:
+            txt = data.decode("utf-8", errors="ignore")
+        except Exception:
+            txt = _read_pdf_text(data)
+
+    p = _procurement_from_text(txt)
+    if p:
+        return p
+
+    # Fallback summary (no speculation): first 2k chars
+    snippet = "\n".join(x for x in txt.splitlines() if x).strip()[:2000]
+    return {"mode": "summary", "text": snippet}
+

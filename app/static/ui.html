@@ -85,6 +85,15 @@
   <pre id="freeform_preview" class="codebox" style="display:none;"></pre>
 </div>
 
+<!-- Single Data File (CSV, Excel, Word, PDF, or Text) -->
+<div class="group">
+  <label class="lbl">Single Data File (CSV, Excel, Word, PDF, or Text)</label>
+  <input id="single_file" type="file" accept=".csv,.xlsx,.xls,.docx,.pdf,.txt" />
+  <label><input id="opt_bilingual" type="checkbox" checked /> Bilingual</label>
+  <button id="btn_single_generate" class="btn primary">Generate from file</button>
+  <div id="single_results" class="results"></div>
+</div>
+
 <div class="bar"><div class="fill" id="bar"></div></div>
 <div id="msg" class="muted"></div>
 <div id="err" style="color:#dc2626;font-size:0.9rem;margin-top:.25rem"></div>
@@ -351,6 +360,46 @@
   document.getElementById('btn_freeform_generate').addEventListener('click', async () => {
     try { await doFreeformGenerate(); } catch(e) { setMsg('Error: '+e.message); setBar(0); }
   });
+</script>
+
+<!-- Single-file track: update button target and render modes -->
+<script>
+  async function generateFromSingle() {
+    const file = document.getElementById('single_file').files[0];
+    if (!file) { toast('Please choose a file'); return; }
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('bilingual', document.getElementById('opt_bilingual').checked ? 'true' : 'false');
+    const resp = await fetch('/single/generate', { method:'POST', body: fd });
+    const data = await resp.json();
+    const out = document.getElementById('single_results');
+    out.innerHTML = '';
+    if (data.mode === 'variance') {
+      out.innerHTML = `<div class="hint">Detected budget vs actual. Showing quick variance items.</div>` +
+        data.items.map(it => `
+          <div class="card">
+            <div class="row">
+              <b>${it.project_id || 'Item'}</b>
+              <span>Budget: SAR ${it.budget_sar.toLocaleString()}</span>
+              <span>Actual: SAR ${it.actual_sar.toLocaleString()}</span>
+              <span>Variance: SAR ${it.variance_sar.toLocaleString()} (${(it.variance_pct??0).toFixed(2)}%)</span>
+            </div>
+          </div>`).join('');
+    } else if (data.mode === 'procurement') {
+      out.innerHTML = `<h3>Procurement Summary</h3>` +
+        data.cards.map(c => `
+          <div class="card">
+            <div class="row"><b>${c.title}</b></div>
+            <div class="row">${c.body_en}</div>
+            ${c.body_ar ? `<div class="row muted">${c.body_ar}</div>` : ''}
+            <div class="row tiny muted">${c.source}</div>
+          </div>`).join('');
+    } else {
+      out.innerHTML = `<div class="card"><pre>${(data.text||'').replaceAll('<','&lt;')}</pre></div>`;
+    }
+  }
+  // wire the single button
+  document.getElementById('btn_single_generate').onclick = generateFromSingle;
 </script>
 
 <style>
