@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Single File Analyzer</title>
+  <script src="static/ui.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .card { border:1px solid #ccc; padding:10px; margin:8px 0; border-radius:6px; }
+    .card-title { font-weight:bold; }
+    .kv { font-size:0.9rem; color:#444; margin-top:4px; }
+    .desc { margin-top:6px; }
+    .src { font-size:0.8rem; color:#666; margin-top:4px; }
+  </style>
+</head>
+<body>
+  <h1>Analyze Single Data File</h1>
+  <input id="single_file_input" type="file" />
+  <label><input id="opt_bilingual" type="checkbox" checked /> Bilingual</label>
+  <label><input id="opt_nospec" type="checkbox" checked /> No speculation</label>
+  <button onclick="generateFromSingleFile()">Analyze</button>
+  <div id="result_box" style="margin-top:20px; white-space:pre-wrap;"></div>
+</body>
+</html>
+

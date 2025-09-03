@@ -43,6 +43,7 @@ from .services.csv_loader import parse_tabular
 from app.services.singlefile import process_single_file, draft_bilingual_procurement_card
 from app.parsers.single_file_intake import parse_single_file
 from .llm.extract_from_text import extract_items_via_llm
+from app.parsers.single_file import analyze_single_file
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
 
@@ -1009,6 +1010,27 @@ async def singlefile_report(file: UploadFile = File(...)) -> Dict[str, Any]:
             for it in items
         ]
     return res
+
+
+@app.post("/singlefile/analyze")
+async def analyze_single_file_endpoint(
+    file: UploadFile = File(...),
+    bilingual: bool = Form(True),
+    no_speculation: bool = Form(True),
+) -> Dict[str, Any]:
+    """
+    Strict single-file analysis:
+    - If we detect budget/actual pairs => produce variance_insights.
+    - Otherwise => produce procurement_summary cards only.
+    - Never invent numbers; only paraphrase descriptions if bilingual.
+    """
+    data = await file.read()
+    return await analyze_single_file(
+        data,
+        file.filename,
+        bilingual=bilingual,
+        no_speculation=no_speculation,
+    )
 
 
 @app.post("/drafts/from-file")
