@@ -70,7 +70,7 @@ class DraftResponse(BaseModel):
 class ProcurementItem(BaseModel):
     """Lightweight summary card for single-file procurement uploads."""
 
-    item_id: Optional[str] = None
+    item_code: Optional[str] = None
     description: Optional[str] = None
     quantity: Optional[float] = None
     unit_price: Optional[float] = None

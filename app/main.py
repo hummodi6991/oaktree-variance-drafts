@@ -238,7 +238,7 @@ def _build_procurement_summary(rows: List[Dict[str, Any]], bilingual: bool = Tru
             ar = " ".join(parts_ar).strip()
         out.append(
             ProcurementItem(
-                item_id=r.get("co_id") or r.get("linked_cost_code"),
+                item_code=r.get("co_id") or r.get("linked_cost_code"),
                 description=r.get("description"),
                 quantity=r.get("quantity"),
                 unit_price=r.get("unit_price"),
@@ -296,7 +296,7 @@ def _build_bid_comparison(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         min_vendor = min(vendor_prices, key=vendor_prices.get)
         amounts = list(vendor_prices.values())
         med = statistics.median(amounts) if amounts else None
-        row: Dict[str, Any] = {"item_id": item}
+        row: Dict[str, Any] = {"item_code": item}
         for vendor, amount in vendor_prices.items():
             variance_vs_median = amount - med if med is not None else None
             pct_spread = (
@@ -583,7 +583,7 @@ async def upload(
         total = sum(c.amount_sar or 0 for c in cards)
         item_table = [
             {
-                "item_id": r.get("co_id") or r.get("linked_cost_code"),
+                "item_code": r.get("co_id") or r.get("linked_cost_code"),
                 "description": r.get("description"),
                 "quantity": r.get("quantity"),
                 "unit_price": r.get("unit_price"),
