@@ -97,6 +97,7 @@ def test_upload_single_data_file():
     assert data["count"] == 2
     cards = data["procurement_summary"]
     assert any(c.get("description") for c in cards)
+    assert all("item_code" in c for c in cards)
 
 
 def test_upload_mutual_exclusive():
@@ -141,6 +142,7 @@ def test_pdf_fallback(monkeypatch):
     assert data["count"] == 2
     assert data["total_amount_sar"] == 300
     assert len(data["procurement_summary"]) == 2
+    assert all("item_code" in c for c in data["procurement_summary"])
 
 
 def test_upload_llm_failure(monkeypatch):
@@ -167,3 +169,4 @@ def test_extract_freeform_procurement_summary():
     assert len(cards) == 2
     assert all(c["evidence_link"] == "Uploaded procurement file" for c in cards)
     assert all("draft_en" in c and "draft_ar" in c for c in cards)
+    assert all("item_code" in c for c in cards)
