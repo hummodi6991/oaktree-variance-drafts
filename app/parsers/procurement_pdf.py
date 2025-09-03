@@ -1,5 +1,6 @@
 from typing import List, Dict, Any
 import io
+import time
 from pdfminer.high_level import extract_text
 import pdfplumber
 import re
@@ -8,6 +9,9 @@ import re
 ROW_TRIPLET = re.compile(
     r"\b(\d{1,3})\s+([0-9]{1,3}(?:[, ]\d{3})*(?:\.\d+)?)\s+([0-9]{1,3}(?:[, ]\d{3})*(?:\.\d+)?)\b"
 )
+
+AMOUNT = r"([0-9]{1,3}(?:,\d{3})*(?:\.\d{2}))"
+PAIR_AMOUNTS = re.compile(fr"{AMOUNT}\s+{AMOUNT}")
 
 RE_DATE = re.compile(r'\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|(?:\d{4}-\d{2}-\d{2}))\b')
 RE_ITEM = re.compile(r'\b(D0?\d|Item\s*No\.?\s*:?\s*\d+)\b', re.I)
@@ -49,6 +53,7 @@ def parse_procurement_pdf(pdf_bytes: bytes) -> Dict[str, Any]:
     Returns {"items":[{item_code, description, qty, unit_price_sar, amount_sar, vendor_name, doc_date}], "meta":{...}}
     Missing fields stay None.
     """
+    started = time.time()
     text = _extract_text_safe(pdf_bytes)
     # Doc date / vendor (best-effort, no invention)
     date = None
@@ -117,4 +122,28 @@ def parse_procurement_pdf(pdf_bytes: bytes) -> Dict[str, Any]:
                 "doc_date": date,
                 "source": "uploaded_file",
             })
+
+    # Fallback 2: two adjacent amounts (unit + total); infer qty = total / unit
+    if not items and text:
+        for u, t in PAIR_AMOUNTS.findall(text):
+            unit = _num(u)
+            total = _num(t)
+            if unit and total and unit > 0:
+                qty = round(total / unit)
+                if 0 < qty < 1000 and abs(total - qty * unit) <= max(1.0, 0.02 * total):
+                    items.append({
+                        "item_code": None,
+                        "description": None,
+                        "qty": qty,
+                        "unit_price_sar": unit,
+                        "amount_sar": total,
+                        "vendor_name": vendor,
+                        "doc_date": date,
+                        "source": "uploaded_file",
+                    })
+
+    # Extra guard — if extraction took too long and we still have nothing, return fast.
+    if time.time() - started > 20 and not items:
+        return {"items": [], "meta": {"vendor_name": vendor, "doc_date": date}}
+
     return {"items": items, "meta": {"vendor_name": vendor, "doc_date": date}}

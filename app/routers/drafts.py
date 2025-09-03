@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File
+import asyncio
 from app.parsers.procurement_pdf import parse_procurement_pdf
 from app.services.singlefile import process_single_file
 
@@ -10,11 +11,19 @@ async def from_file(file: UploadFile = File(...)):
         data = await file.read()
         is_pdf = file.filename.lower().endswith(".pdf")
         if is_pdf:
-            result = parse_procurement_pdf(data)
-            payload = {"procurement_summary": {"items": result.get("items", [])}, "meta": result.get("meta", {})}
-        else:
-            payload = process_single_file(file.filename, data)
-        return payload
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(parse_procurement_pdf, data),
+                    timeout=25,
+                )
+            except asyncio.TimeoutError:
+                return {"error": "PDF parsing timed out after 25 seconds."}
+            return {
+                "procurement_summary": {"items": result.get("items", [])},
+                "meta": result.get("meta", {})
+            }
+        processed = await asyncio.to_thread(process_single_file, file.filename, data)
+        return processed
     except Exception as e:
-        # Never bubble up to a 502 — surface as a structured response the UI can display.
+        # Surface as JSON the UI can show instead of crashing upstream (502).
         return {"error": f"single-file parse failed: {type(e).__name__}: {e}"}
