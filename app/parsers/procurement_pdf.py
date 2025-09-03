@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
 import io
 from pdfminer.high_level import extract_text
+import pdfplumber
 import re
 
 # Fallback: detect unlabeled "qty unit_price total" rows
@@ -26,13 +27,29 @@ def _num(s: str) -> float | None:
         return None
 
 
+def _extract_text_safe(pdf_bytes: bytes) -> str:
+    """Try pdfminer, fall back to pdfplumber on failure."""
+    try:
+        return extract_text(io.BytesIO(pdf_bytes)) or ""
+    except Exception:
+        try:
+            buf = io.BytesIO(pdf_bytes)
+            all_text: list[str] = []
+            with pdfplumber.open(buf) as pdf:
+                for page in pdf.pages:
+                    all_text.append(page.extract_text() or "")
+            return "\n".join(all_text)
+        except Exception:
+            return ""
+
+
 def parse_procurement_pdf(pdf_bytes: bytes) -> Dict[str, Any]:
     """
     Extract line items without inventing anything.
     Returns {"items":[{item_code, description, qty, unit_price_sar, amount_sar, vendor_name, doc_date}], "meta":{...}}
     Missing fields stay None.
     """
-    text = extract_text(io.BytesIO(pdf_bytes)) or ""
+    text = _extract_text_safe(pdf_bytes)
     # Doc date / vendor (best-effort, no invention)
     date = None
     m = RE_DATE.search(text)
@@ -87,8 +104,8 @@ def parse_procurement_pdf(pdf_bytes: bytes) -> Dict[str, Any]:
             "source": "uploaded_file",
         })
 
-    # NEW: if no labeled rows were captured, fall back to unlabeled triplets
-    if not items:
+    # Fallback: unlabeled "qty price amount" rows, e.g. "SETS 18 2,000.00 36,000.00"
+    if not items and text:
         for q, up, amt in ROW_TRIPLET.findall(text):
             items.append({
                 "item_code": None,
