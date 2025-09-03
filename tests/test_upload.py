@@ -121,6 +121,29 @@ def test_upload_single_data_file_budget_variance():
     assert data["unpaired_summary"]["total_actual_sar"] == 80.0
 
 
+def test_upload_text_budget_actuals():
+    client = TestClient(app)
+    text = b"Project Alpha planned 100 actual 120\n"
+    files = {"data_file": ("notes.txt", text, "text/plain")}
+    resp = client.post("/upload", files=files, data={"api_key": "testkey"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mode"] == "budget_actuals"
+    assert data["paired_count"] == 1
+    assert data["unpaired_count"] == 0
+
+
+def test_upload_text_summary():
+    client = TestClient(app)
+    text = b"This file only contains narrative text without numbers."
+    files = {"data_file": ("notes.txt", text, "text/plain")}
+    resp = client.post("/upload", files=files, data={"api_key": "testkey"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mode"] == "summary"
+    assert "narrative" in data["summary"].lower()
+
+
 def test_upload_mutual_exclusive():
     client = TestClient(app)
     base = Path("data/templates")
