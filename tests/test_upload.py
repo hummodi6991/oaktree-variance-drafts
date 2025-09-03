@@ -164,9 +164,26 @@ def test_extract_freeform_procurement_summary():
     resp = client.post("/extract/freeform", files=files)
     assert resp.status_code == 200
     data = resp.json()
+    assert data["mode"] == "change_orders"
     assert data["count"] == 2
     cards = data["procurement_summary"]
     assert len(cards) == 2
     assert all(c["evidence_link"] == "Uploaded procurement file" for c in cards)
     assert all("draft_en" in c and "draft_ar" in c for c in cards)
     assert all("item_code" in c for c in cards)
+
+
+def test_extract_freeform_budget_actuals():
+    client = TestClient(app)
+    file_content = (
+        b"project_id,period,cost_code,budget_sar,actual_sar\n"
+        b"P1,2024-01,CC1,100,120\n"
+        b"P1,2024-02,CC2,50,40\n"
+    )
+    files = {"files": ("ba.csv", file_content, "text/csv")}
+    resp = client.post("/extract/freeform", files=files)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mode"] == "budget_actuals"
+    assert len(data["rows"]) == 2
+    assert data["count"] == 2

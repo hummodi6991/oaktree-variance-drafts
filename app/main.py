@@ -58,6 +58,12 @@ SAFE_CO_COLS = [
     "inclusions",
     "exclusions",
     "notes",
+    # Budget/actual fields (for free-form uploads)
+    "budget_sar",
+    "actual_sar",
+    "period",
+    "cost_code",
+    "category",
 ]
 
 
@@ -171,6 +177,56 @@ def _rows_from_tablelike(df: pd.DataFrame) -> List[Dict[str, Any]]:
                 item["vat_rate"] = None
         if item.get("amount_sar") is None and item.get("quantity") is not None and item.get("unit_price") is not None:
             item["amount_sar"] = item["quantity"] * item["unit_price"]
+        out.append(item)
+    return out
+
+
+def _rows_from_budget_actuals(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Tolerant parser for budget vs actual style tables.
+
+    Looks for project, period, cost code/category along with budget and
+    actual columns. Missing columns are filled with ``None`` so downstream
+    logic can still operate on partially-complete rows.
+    """
+    colmap: Dict[str, str] = {}
+    for c in df.columns:
+        k = c.strip().lower()
+        if k in ["project", "project_id", "project name", "projectname"]:
+            colmap["project_id"] = c
+        elif k in ["period", "month", "yyyymm", "yyyy-mm", "period(yyyy-mm)"]:
+            colmap["period"] = c
+        elif k in ["cost_code", "costcode", "code", "linked_cost_code"]:
+            colmap["cost_code"] = c
+        elif k in ["category", "cost_category", "type"]:
+            colmap["category"] = c
+        elif k in ["budget", "budget_sar", "budget amount", "budget_amt"]:
+            colmap["budget_sar"] = c
+        elif k in ["actual", "actual_sar", "actual amount", "actual_amt"]:
+            colmap["actual_sar"] = c
+
+    out: List[Dict[str, Any]] = []
+    for _, r in df.iterrows():
+        item: Dict[str, Any] = {}
+        for k in [
+            "project_id",
+            "period",
+            "cost_code",
+            "category",
+            "budget_sar",
+            "actual_sar",
+        ]:
+            v = r[colmap[k]] if k in colmap else None
+            if pd.isna(v):
+                v = None
+            if k in ("budget_sar", "actual_sar") and v is not None:
+                try:
+                    v = float(str(v).replace(",", ""))
+                except Exception:
+                    v = None
+            item[k] = v
+        # Ignore rows lacking both budget and actual figures
+        if item.get("budget_sar") is None and item.get("actual_sar") is None:
+            continue
         out.append(item)
     return out
 
@@ -344,8 +400,15 @@ def _compute_best_mix(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 @app.post("/extract/freeform")
 async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
-    """Accept CSV/XLSX/DOCX/PDF/TXT and return tolerant change-order like rows."""
+    """Accept CSV/XLSX/DOCX/PDF/TXT and return tolerant row dicts.
+
+    The return payload includes a ``mode`` field indicating whether the rows
+    resemble change-order data (``change_orders``) or budget-vs-actual data
+    (``budget_actuals``). This allows the caller to route the rows to the
+    appropriate pipeline.
+    """
     all_rows: List[Dict[str, Any]] = []
+    mode = "change_orders"
     for f in files:
         data = await f.read()
         name = f.filename or "upload.bin"
@@ -354,7 +417,13 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
         if any(low.endswith(ext) for ext in [".csv", ".xlsx", ".xls"]):
             df = _df_from_bytes(name, data)
             if not df.empty:
-                rows = _rows_from_tablelike(df)
+                co_rows = _rows_from_tablelike(df)
+                ba_rows = _rows_from_budget_actuals(df)
+                if ba_rows and not any(r.get("amount_sar") for r in co_rows):
+                    rows = ba_rows
+                    mode = "budget_actuals"
+                else:
+                    rows = co_rows
         elif any(low.endswith(ext) for ext in [".pdf", ".docx", ".txt", ".md", ".rtf"]):
             text = _text_from_bytes(name, data)
             rows = _rows_from_text(text)
@@ -373,7 +442,13 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
         else:
             df = _df_from_bytes(name, data)
             if not df.empty:
-                rows = _rows_from_tablelike(df)
+                co_rows = _rows_from_tablelike(df)
+                ba_rows = _rows_from_budget_actuals(df)
+                if ba_rows and not any(r.get("amount_sar") for r in co_rows):
+                    rows = ba_rows
+                    mode = "budget_actuals"
+                else:
+                    rows = co_rows
             else:
                 text = _text_from_bytes(name, data)
                 rows = _rows_from_text(text)
@@ -395,11 +470,17 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
         for r in all_rows
         if any(v is not None and str(v).strip() != "" for v in r.values())
     ]
-    cards = _build_procurement_summary(filtered)
+    if mode == "budget_actuals":
+        cards: List[ProcurementItem] = []
+        count = len(filtered)
+    else:
+        cards = _build_procurement_summary(filtered)
+        count = len(cards)
     return {
         "rows": filtered,
         "procurement_summary": [c.model_dump() for c in cards],
-        "count": len(cards),
+        "count": count,
+        "mode": mode,
     }
 
 # Static UI for CEO
@@ -552,9 +633,16 @@ async def upload(
         data = await data_file.read()
         name = data_file.filename or "upload"
         rows: List[Dict[str, Any]] = []
+        mode = "change_orders"
         df = _df_from_bytes(name, data)
         if not df.empty:
-            rows = _rows_from_tablelike(df)
+            co_rows = _rows_from_tablelike(df)
+            ba_rows = _rows_from_budget_actuals(df)
+            if ba_rows and not any(r.get("amount_sar") for r in co_rows):
+                rows = ba_rows
+                mode = "budget_actuals"
+            else:
+                rows = co_rows
             # If every field in every row is blank, treat as empty and fallback to text parsing
             if all(all(v in (None, "") for v in r.values()) for r in rows):
                 rows = []
@@ -576,6 +664,38 @@ async def upload(
         filtered = [
             r for r in rows if any(v is not None and str(v).strip() != "" for v in r.values())
         ]
+        if mode == "budget_actuals":
+            if not filtered:
+                return {"count": 0, "procurement_summary": [], "mode": mode}
+            ba_models = [
+                BudgetActualRow(
+                    project_id=r.get("project_id") or "Unknown",
+                    period=r.get("period") or "1970-01",
+                    cost_code=r.get("cost_code") or r.get("linked_cost_code") or "UNKNOWN",
+                    category=r.get("category"),
+                    budget_sar=float(r.get("budget_sar") or 0),
+                    actual_sar=float(r.get("actual_sar") or 0),
+                    currency=r.get("currency"),
+                    remarks=r.get("remarks"),
+                )
+                for r in filtered
+            ]
+            cfg = ConfigModel(
+                materiality_pct=materiality_pct,
+                materiality_amount_sar=materiality_amount_sar,
+                bilingual=bilingual,
+                enforce_no_speculation=enforce_no_speculation,
+            )
+            req = DraftRequest(
+                budget_actuals=ba_models,
+                change_orders=[],
+                vendor_map=[],
+                category_map=[],
+                config=cfg,
+            )
+            result = generate_drafts(req)
+            return result
+        # change order style report
         cards = _build_procurement_summary(filtered, bilingual=bilingual)
         snapshots = _build_vendor_snapshots(filtered)
         bid_grid = _build_bid_comparison(filtered)
