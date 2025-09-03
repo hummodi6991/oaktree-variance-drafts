@@ -210,8 +210,10 @@ def _build_procurement_summary(rows: List[Dict[str, Any]], bilingual: bool = Tru
     """Convert raw row dicts to ProcurementItem cards."""
     out: List[ProcurementItem] = []
     for r in rows:
-        if not (r.get("description") or r.get("amount_sar") or r.get("vendor_name")):
+        # Skip rows that are entirely empty but keep partially-filled ones
+        if all(r.get(k) in (None, "") for k in SAFE_CO_COLS):
             continue
+
         parts_en: List[str] = []
         if r.get("co_id"):
             parts_en.append(f"Item {r['co_id']}")
@@ -388,8 +390,17 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
                             "vendor_name": None,
                         })
         all_rows.extend(rows)
-    filtered = [r for r in all_rows if (r.get("description") or r.get("amount_sar") is not None)]
-    return {"rows": filtered, "count": len(filtered)}
+    filtered = [
+        r
+        for r in all_rows
+        if any(v is not None and str(v).strip() != "" for v in r.values())
+    ]
+    cards = _build_procurement_summary(filtered)
+    return {
+        "rows": filtered,
+        "procurement_summary": [c.model_dump() for c in cards],
+        "count": len(cards),
+    }
 
 # Static UI for CEO
 try:
@@ -544,10 +555,8 @@ async def upload(
         df = _df_from_bytes(name, data)
         if not df.empty:
             rows = _rows_from_tablelike(df)
-            if all(
-                not (r.get("description") or r.get("amount_sar") is not None)
-                for r in rows
-            ):
+            # If every field in every row is blank, treat as empty and fallback to text parsing
+            if all(all(v in (None, "") for v in r.values()) for r in rows):
                 rows = []
         if not rows:
             text = _text_from_bytes(name, data)
@@ -564,7 +573,9 @@ async def upload(
                         "amount_sar": it.get("amount_sar"),
                         "vendor_name": None,
                     })
-        filtered = [r for r in rows if (r.get("description") or r.get("amount_sar") is not None)]
+        filtered = [
+            r for r in rows if any(v is not None and str(v).strip() != "" for v in r.values())
+        ]
         cards = _build_procurement_summary(filtered, bilingual=bilingual)
         snapshots = _build_vendor_snapshots(filtered)
         bid_grid = _build_bid_comparison(filtered)
