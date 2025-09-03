@@ -153,3 +153,17 @@ def test_upload_llm_failure(monkeypatch):
     data = resp.json()
     assert data["count"] == 0
     assert data["procurement_summary"] == []
+
+
+def test_extract_freeform_procurement_summary():
+    client = TestClient(app)
+    file_content = b"co_id\nD01\nD02\n"
+    files = {"files": ("test.csv", file_content, "text/csv")}
+    resp = client.post("/extract/freeform", files=files)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    cards = data["procurement_summary"]
+    assert len(cards) == 2
+    assert all(c["evidence_link"] == "Uploaded procurement file" for c in cards)
+    assert all("draft_en" in c and "draft_ar" in c for c in cards)
