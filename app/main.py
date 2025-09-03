@@ -4,6 +4,7 @@ import io
 import uuid
 import csv  # noqa: F401
 import json  # noqa: F401
+import statistics
 from typing import Any, Dict, List, Optional
 
 import chardet
@@ -34,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from .schemas import DraftRequest, DraftResponse, ProcurementItem
+from .schemas import DraftRequest, DraftResponse, ProcurementItem, VendorSnapshot
 from .pipeline import generate_drafts
 from .services.csv_loader import parse_tabular
 from .llm.extract_from_text import extract_items_via_llm
@@ -50,6 +51,13 @@ SAFE_CO_COLS = [
     "project_id",
     "vendor_name",
     "file_link",
+    "quantity",
+    "unit_price",
+    "currency",
+    "vat_rate",
+    "inclusions",
+    "exclusions",
+    "notes",
 ]
 
 
@@ -116,6 +124,20 @@ def _rows_from_tablelike(df: pd.DataFrame) -> List[Dict[str, Any]]:
             colmap["vendor_name"] = c
         elif k in ["file", "file_link", "evidence", "link", "url"]:
             colmap["file_link"] = c
+        elif k in ["qty", "quantity", "qty."]:
+            colmap["quantity"] = c
+        elif k in ["unit_price", "unit price", "price", "unit_cost", "rate", "unit cost"]:
+            colmap["unit_price"] = c
+        elif k in ["currency", "curr", "cur"]:
+            colmap["currency"] = c
+        elif k in ["vat", "vat_rate", "vat%", "vat %", "vat rate"]:
+            colmap["vat_rate"] = c
+        elif k in ["inclusions", "includes", "inclusion"]:
+            colmap["inclusions"] = c
+        elif k in ["exclusions", "excludes", "exclusion"]:
+            colmap["exclusions"] = c
+        elif k in ["notes", "remarks", "comment", "comments"]:
+            colmap["notes"] = c
     out: List[Dict[str, Any]] = []
     for _, r in df.iterrows():
         item: Dict[str, Any] = {}
@@ -132,6 +154,23 @@ def _rows_from_tablelike(df: pd.DataFrame) -> List[Dict[str, Any]]:
                 item["amount_sar"] = float(str(item["amount_sar"]).replace(",", ""))
             except Exception:
                 item["amount_sar"] = None
+        if item.get("quantity") is not None:
+            try:
+                item["quantity"] = float(str(item["quantity"]).replace(",", ""))
+            except Exception:
+                item["quantity"] = None
+        if item.get("unit_price") is not None:
+            try:
+                item["unit_price"] = float(str(item["unit_price"]).replace(",", ""))
+            except Exception:
+                item["unit_price"] = None
+        if item.get("vat_rate") is not None:
+            try:
+                item["vat_rate"] = float(str(item["vat_rate"]).replace("%", "").replace(",", ""))
+            except Exception:
+                item["vat_rate"] = None
+        if item.get("amount_sar") is None and item.get("quantity") is not None and item.get("unit_price") is not None:
+            item["amount_sar"] = item["quantity"] * item["unit_price"]
         out.append(item)
     return out
 
@@ -157,6 +196,14 @@ def _rows_from_text(text: str) -> List[Dict[str, Any]]:
         item["amount_sar"] = maybe_amount
         rows.append(item)
     return rows
+
+
+def _extract_rows_via_llm(text: str) -> List[Dict[str, Any]]:
+    """Fallback extraction via LLM; swallow errors if model unavailable."""
+    try:
+        return extract_items_via_llm(text)
+    except Exception:
+        return []
 
 
 def _build_procurement_summary(rows: List[Dict[str, Any]], bilingual: bool = True) -> List[ProcurementItem]:
@@ -204,6 +251,95 @@ def _build_procurement_summary(rows: List[Dict[str, Any]], bilingual: bool = Tru
     return out
 
 
+def _build_vendor_snapshots(rows: List[Dict[str, Any]]) -> List[VendorSnapshot]:
+    out: List[VendorSnapshot] = []
+    by_vendor: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        vendor = r.get("vendor_name")
+        if not vendor:
+            continue
+        by_vendor.setdefault(vendor, []).append(r)
+    for vendor, items in by_vendor.items():
+        total = sum(float(it.get("amount_sar") or 0) for it in items)
+        vat_rate = next((it.get("vat_rate") for it in items if it.get("vat_rate") is not None), None)
+        currency = next((it.get("currency") for it in items if it.get("currency") is not None), None)
+        quote_date = next((it.get("date") for it in items if it.get("date") is not None), None)
+        total_incl = total * (1 + (vat_rate or 0) / 100) if total else None
+        out.append(
+            VendorSnapshot(
+                vendor=vendor,
+                quote_date=quote_date,
+                currency=currency,
+                vat_rate=vat_rate,
+                total_excl_vat=total or None,
+                total_incl_vat=total_incl,
+            )
+        )
+    return out
+
+
+def _build_bid_comparison(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grid: Dict[str, Dict[str, float]] = {}
+    for r in rows:
+        item = r.get("co_id") or r.get("linked_cost_code") or r.get("description")
+        vendor = r.get("vendor_name") or "Unknown"
+        amt = r.get("amount_sar")
+        if item is None or amt is None:
+            continue
+        grid.setdefault(str(item), {})[vendor] = float(amt)
+    out: List[Dict[str, Any]] = []
+    for item, vendor_prices in grid.items():
+        if not vendor_prices:
+            continue
+        min_vendor = min(vendor_prices, key=vendor_prices.get)
+        amounts = list(vendor_prices.values())
+        med = statistics.median(amounts) if amounts else None
+        row: Dict[str, Any] = {"item_id": item}
+        for vendor, amount in vendor_prices.items():
+            variance_vs_median = amount - med if med is not None else None
+            pct_spread = (
+                (variance_vs_median / med) * 100 if (med and variance_vs_median is not None) else None
+            )
+            row[vendor] = {
+                "amount_sar": amount,
+                "is_lowest": vendor == min_vendor,
+                "variance_vs_median": variance_vs_median,
+                "pct_spread_vs_median": pct_spread,
+            }
+        out.append(row)
+    return out
+
+
+def _compute_best_mix(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    prices: Dict[str, Dict[str, float]] = {}
+    vendor_totals: Dict[str, float] = {}
+    for r in rows:
+        item = r.get("co_id") or r.get("linked_cost_code") or r.get("description")
+        vendor = r.get("vendor_name") or "Unknown"
+        amt = r.get("amount_sar")
+        if item is None or amt is None:
+            continue
+        prices.setdefault(str(item), {})[vendor] = float(amt)
+        vendor_totals[vendor] = vendor_totals.get(vendor, 0.0) + float(amt)
+    best_total = 0.0
+    for vp in prices.values():
+        best_total += min(vp.values())
+    cheapest_vendor = None
+    single_total = None
+    if vendor_totals:
+        cheapest_vendor = min(vendor_totals, key=vendor_totals.get)
+        single_total = vendor_totals[cheapest_vendor]
+    savings = None
+    if single_total is not None:
+        savings = single_total - best_total
+    return {
+        "best_mix_total_sar": best_total if best_total else None,
+        "cheapest_single_vendor": cheapest_vendor,
+        "single_vendor_total_sar": single_total,
+        "estimated_savings_sar": savings,
+    }
+
+
 @app.post("/extract/freeform")
 async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
     """Accept CSV/XLSX/DOCX/PDF/TXT and return tolerant change-order like rows."""
@@ -221,7 +357,7 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
             text = _text_from_bytes(name, data)
             rows = _rows_from_text(text)
             if not rows:
-                for it in extract_items_via_llm(text):
+                for it in _extract_rows_via_llm(text):
                     rows.append({
                         "project_id": None,
                         "linked_cost_code": None,
@@ -240,7 +376,7 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
                 text = _text_from_bytes(name, data)
                 rows = _rows_from_text(text)
                 if not rows:
-                    for it in extract_items_via_llm(text):
+                    for it in _extract_rows_via_llm(text):
                         rows.append({
                             "project_id": None,
                             "linked_cost_code": None,
@@ -417,7 +553,7 @@ async def upload(
             text = _text_from_bytes(name, data)
             rows = _rows_from_text(text)
             if not rows:
-                for it in extract_items_via_llm(text):
+                for it in _extract_rows_via_llm(text):
                     rows.append({
                         "project_id": None,
                         "linked_cost_code": None,
@@ -430,9 +566,34 @@ async def upload(
                     })
         filtered = [r for r in rows if (r.get("description") or r.get("amount_sar") is not None)]
         cards = _build_procurement_summary(filtered, bilingual=bilingual)
+        snapshots = _build_vendor_snapshots(filtered)
+        bid_grid = _build_bid_comparison(filtered)
+        best_mix = _compute_best_mix(filtered)
         total = sum(c.amount_sar or 0 for c in cards)
+        item_table = [
+            {
+                "item_id": r.get("co_id") or r.get("linked_cost_code"),
+                "description": r.get("description"),
+                "quantity": r.get("quantity"),
+                "unit_price": r.get("unit_price"),
+                "line_total_sar": r.get("amount_sar"),
+                "inclusions": r.get("inclusions"),
+                "exclusions": r.get("exclusions"),
+                "notes": r.get("notes"),
+                "vendor": r.get("vendor_name"),
+            }
+            for r in filtered
+        ]
+        exclusions_audit = sorted({r["exclusions"] for r in filtered if r.get("exclusions")})
+        readiness = "green" if snapshots else "red"
         return {
             "procurement_summary": [c.model_dump() for c in cards],
+            "vendor_snapshots": [s.model_dump() for s in snapshots],
+            "item_table": item_table,
+            "bid_comparison": bid_grid,
+            "best_mix": best_mix,
+            "exclusions_audit": exclusions_audit,
+            "readiness_to_po": readiness,
             "count": len(cards),
             "total_amount_sar": total,
         }

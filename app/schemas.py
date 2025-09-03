@@ -80,3 +80,17 @@ class ProcurementItem(BaseModel):
     evidence_link: str = "Uploaded procurement file"
     draft_en: str
     draft_ar: Optional[str] = None
+
+
+class VendorSnapshot(BaseModel):
+    """Aggregated vendor-level info for single-file uploads."""
+
+    vendor: str
+    quote_date: Optional[str] = None
+    validity_window: Optional[str] = None
+    delivery_lead_time: Optional[str] = None
+    payment_terms: Optional[str] = None
+    currency: Optional[str] = None
+    vat_rate: Optional[float] = None
+    total_excl_vat: Optional[float] = None
+    total_incl_vat: Optional[float] = None
