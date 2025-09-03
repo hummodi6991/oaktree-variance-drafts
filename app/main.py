@@ -41,6 +41,7 @@ from .schemas import DraftRequest, DraftResponse, ProcurementItem, VendorSnapsho
 from .pipeline import generate_drafts
 from .services.csv_loader import parse_tabular
 from app.services.singlefile import process_single_file, draft_bilingual_procurement_card
+from app.parsers.single_file_intake import parse_single_file
 from .llm.extract_from_text import extract_items_via_llm
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
@@ -991,12 +992,10 @@ async def drafts_upload(
 
 
 # --- Single Data File endpoint (extended) ---
-from fastapi import UploadFile, File
-from typing import Dict, Any
 
 
 @app.post("/singlefile/report")
-async def singlefile_report(file: UploadFile = File(...)) -> Dict[str,Any]:
+async def singlefile_report(file: UploadFile = File(...)) -> Dict[str, Any]:
     """
     If Budget+Actual found -> {"mode":"variance","variances":[...], "insights": {...}}
     Else -> {"mode":"summary","items":[...,"drafts":[{en,ar},...] ]}
@@ -1005,5 +1004,30 @@ async def singlefile_report(file: UploadFile = File(...)) -> Dict[str,Any]:
     res = process_single_file(file.filename or "upload.bin", data)
     if res.get("mode") == "summary":
         items = res.get("items", [])
-        res["drafts"] = [draft_bilingual_procurement_card(it, "Uploaded procurement file") for it in items]
+        res["drafts"] = [
+            draft_bilingual_procurement_card(it, "Uploaded procurement file")
+            for it in items
+        ]
     return res
+
+
+@app.post("/drafts/from-file")
+async def drafts_from_file(
+    file: UploadFile = File(...),
+    bilingual: bool = Form(True),
+    no_speculation: bool = Form(True),
+    materiality_pct: float = Form(5.0),
+    materiality_amount_sar: float = Form(100000.0),
+):
+    data = await file.read()
+    parsed = parse_single_file(file.filename, data)
+
+    # If we found variance items, return them as-is (UI already knows how to render)
+    if "variance_items" in parsed:
+        return JSONResponse(parsed)
+
+    # Otherwise, return Procurement Summary skeleton (UI will render dedicated cards)
+    if "procurement_summary" in parsed:
+        return JSONResponse(parsed)
+
+    return JSONResponse({"procurement_summary": {"items": [], "meta": {}}})

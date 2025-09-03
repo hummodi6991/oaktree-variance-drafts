@@ -88,10 +88,11 @@
 <!-- Single Data File (CSV, Excel, Word, PDF, or Text) -->
 <div class="group">
   <label class="lbl">Single Data File (CSV, Excel, Word, PDF, or Text)</label>
-  <input id="single_file" type="file" accept=".csv,.xlsx,.xls,.docx,.pdf,.txt" />
-  <label><input id="opt_bilingual" type="checkbox" checked /> Bilingual</label>
-  <button id="btn_single_generate" class="btn primary">Generate from file</button>
-  <div id="single_results" class="results"></div>
+  <input id="single-file-input" type="file" accept=".csv,.xlsx,.xls,.docx,.pdf,.txt" />
+  <label><input id="opt-bilingual" type="checkbox" checked /> Bilingual</label>
+  <label><input id="opt-nospec" type="checkbox" checked /> No speculation</label>
+  <!-- hook:single-file-generate-button -->
+  <button class="btn" onclick="generateFromSingleFile()">Generate from file</button>
 </div>
 
 <div class="bar"><div class="fill" id="bar"></div></div>
@@ -362,44 +363,60 @@
   });
 </script>
 
-<!-- Single-file track: update button target and render modes -->
+<!-- Single file card renderer -->
 <script>
-  async function generateFromSingle() {
-    const file = document.getElementById('single_file').files[0];
-    if (!file) { toast('Please choose a file'); return; }
+  async function generateFromSingleFile() {
     const fd = new FormData();
-    fd.append('file', file);
-    fd.append('bilingual', document.getElementById('opt_bilingual').checked ? 'true' : 'false');
-    const resp = await fetch('/single/generate', { method:'POST', body: fd });
-    const data = await resp.json();
-    const out = document.getElementById('single_results');
-    out.innerHTML = '';
-    if (data.mode === 'variance') {
-      out.innerHTML = `<div class="hint">Detected budget vs actual. Showing quick variance items.</div>` +
-        data.items.map(it => `
-          <div class="card">
-            <div class="row">
-              <b>${it.project_id || 'Item'}</b>
-              <span>Budget: SAR ${it.budget_sar.toLocaleString()}</span>
-              <span>Actual: SAR ${it.actual_sar.toLocaleString()}</span>
-              <span>Variance: SAR ${it.variance_sar.toLocaleString()} (${(it.variance_pct??0).toFixed(2)}%)</span>
-            </div>
-          </div>`).join('');
-    } else if (data.mode === 'procurement') {
-      out.innerHTML = `<h3>Procurement Summary</h3>` +
-        data.cards.map(c => `
-          <div class="card">
-            <div class="row"><b>${c.title}</b></div>
-            <div class="row">${c.body_en}</div>
-            ${c.body_ar ? `<div class="row muted">${c.body_ar}</div>` : ''}
-            <div class="row tiny muted">${c.source}</div>
-          </div>`).join('');
-    } else {
-      out.innerHTML = `<div class="card"><pre>${(data.text||'').replaceAll('<','&lt;')}</pre></div>`;
+    const f = document.querySelector('#single-file-input').files[0];
+    if (!f) { toast('Please choose a file'); return; }
+    fd.append('file', f);
+    fd.append('bilingual', document.querySelector('#opt-bilingual').checked ? 'true' : 'false');
+    fd.append('no_speculation', document.querySelector('#opt-nospec').checked ? 'true' : 'false');
+
+    setStatus('Calling model…');
+    try {
+      const res = await fetch('/drafts/from-file', { method:'POST', body: fd });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      clearReport();
+
+      if (data.procurement_summary && data.procurement_summary.items && data.procurement_summary.items.length) {
+        renderProcurementSummary(data.procurement_summary);
+        setStatus('Done');
+        return;
+      }
+      if (data.variance_items && data.variance_items.length) {
+        renderVarianceList(data.variance_items);
+        setStatus('Done');
+        return;
+      }
+      setStatus('No variance items found.');
+    } catch (e) {
+      setStatus('Load failed');
+      showError(e.message || e.toString());
     }
   }
-  // wire the single button
-  document.getElementById('btn_single_generate').onclick = generateFromSingle;
+
+  function renderProcurementSummary(ps) {
+    const root = ensureSection('report-root', 'Procurement Summary');
+    ps.items.forEach((it, idx) => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="row">
+          <div><b>Item</b>: ${it.item_code ?? '—'}</div>
+          <div><b>Qty</b>: ${it.qty ?? '—'}</div>
+          <div><b>Unit price (SAR)</b>: ${it.unit_price_sar ?? '—'}</div>
+          <div><b>Amount (SAR)</b>: ${it.amount_sar ?? '—'}</div>
+          <div><b>Vendor</b>: ${it.vendor_name ?? '—'}</div>
+          <div><b>Doc date</b>: ${it.doc_date ?? '—'}</div>
+        </div>
+        <div class="desc">${escapeHtml(it.description || '')}</div>
+        <div class="evidence"><i>Source: Uploaded procurement file</i></div>
+      `;
+      root.appendChild(card);
+    });
+  }
 </script>
 
 <style>
