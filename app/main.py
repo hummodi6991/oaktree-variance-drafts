@@ -666,35 +666,73 @@ async def upload(
         ]
         if mode == "budget_actuals":
             if not filtered:
-                return {"count": 0, "procurement_summary": [], "mode": mode}
-            ba_models = [
-                BudgetActualRow(
-                    project_id=r.get("project_id") or "Unknown",
-                    period=r.get("period") or "1970-01",
-                    cost_code=r.get("cost_code") or r.get("linked_cost_code") or "UNKNOWN",
-                    category=r.get("category"),
-                    budget_sar=float(r.get("budget_sar") or 0),
-                    actual_sar=float(r.get("actual_sar") or 0),
-                    currency=r.get("currency"),
-                    remarks=r.get("remarks"),
-                )
+                return {
+                    "mode": mode,
+                    "drafts": [],
+                    "paired_count": 0,
+                    "unpaired_count": 0,
+                    "unpaired_rows": [],
+                    "unpaired_summary": {
+                        "total_budget_sar": 0.0,
+                        "total_actual_sar": 0.0,
+                    },
+                }
+
+            paired = [
+                r
                 for r in filtered
+                if r.get("budget_sar") is not None and r.get("actual_sar") is not None
             ]
-            cfg = ConfigModel(
-                materiality_pct=materiality_pct,
-                materiality_amount_sar=materiality_amount_sar,
-                bilingual=bilingual,
-                enforce_no_speculation=enforce_no_speculation,
-            )
-            req = DraftRequest(
-                budget_actuals=ba_models,
-                change_orders=[],
-                vendor_map=[],
-                category_map=[],
-                config=cfg,
-            )
-            result = generate_drafts(req)
-            return result
+            unpaired = [r for r in filtered if r not in paired]
+
+            drafts = []
+            if paired:
+                ba_models = [
+                    BudgetActualRow(
+                        project_id=r.get("project_id") or "Unknown",
+                        period=r.get("period") or "1970-01",
+                        cost_code=r.get("cost_code")
+                        or r.get("linked_cost_code")
+                        or "UNKNOWN",
+                        category=r.get("category"),
+                        budget_sar=float(r.get("budget_sar") or 0),
+                        actual_sar=float(r.get("actual_sar") or 0),
+                        currency=r.get("currency"),
+                        remarks=r.get("remarks"),
+                    )
+                    for r in paired
+                ]
+                cfg = ConfigModel(
+                    materiality_pct=materiality_pct,
+                    materiality_amount_sar=materiality_amount_sar,
+                    bilingual=bilingual,
+                    enforce_no_speculation=enforce_no_speculation,
+                )
+                req = DraftRequest(
+                    budget_actuals=ba_models,
+                    change_orders=[],
+                    vendor_map=[],
+                    category_map=[],
+                    config=cfg,
+                )
+                drafts = generate_drafts(req)
+
+            unpaired_summary = {
+                "total_budget_sar": sum(
+                    float(r.get("budget_sar") or 0) for r in unpaired
+                ),
+                "total_actual_sar": sum(
+                    float(r.get("actual_sar") or 0) for r in unpaired
+                ),
+            }
+            return {
+                "mode": mode,
+                "drafts": [d.model_dump() for d in drafts],
+                "paired_count": len(paired),
+                "unpaired_count": len(unpaired),
+                "unpaired_rows": unpaired,
+                "unpaired_summary": unpaired_summary,
+            }
         # change order style report
         cards = _build_procurement_summary(filtered, bilingual=bilingual)
         snapshots = _build_vendor_snapshots(filtered)

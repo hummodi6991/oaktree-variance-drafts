@@ -100,6 +100,27 @@ def test_upload_single_data_file():
     assert all("item_code" in c for c in cards)
 
 
+def test_upload_single_data_file_budget_variance():
+    client = TestClient(app)
+    file_content = (
+        b"project_id,period,cost_code,budget_sar,actual_sar\n"
+        b"P1,2024-01,CC1,100,120\n"  # paired
+        b"P1,2024-02,CC2,50,\n"       # budget only
+        b"P1,2024-03,CC3,,80\n"      # actual only
+    )
+    files = {"data_file": ("ba.csv", file_content, "text/csv")}
+    resp = client.post("/upload", files=files, data={"api_key": "testkey"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["paired_count"] == 1
+    assert data["unpaired_count"] == 2
+    assert len(data["drafts"]) == 1
+    v = data["drafts"][0]["variance"]
+    assert v["variance_sar"] == 20.0
+    assert data["unpaired_summary"]["total_budget_sar"] == 50.0
+    assert data["unpaired_summary"]["total_actual_sar"] == 80.0
+
+
 def test_upload_mutual_exclusive():
     client = TestClient(app)
     base = Path("data/templates")
