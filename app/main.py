@@ -6,6 +6,8 @@ import csv  # noqa: F401
 import json  # noqa: F401
 import statistics
 from typing import Any, Dict, List, Optional
+import re
+import textwrap
 
 import chardet
 import pandas as pd
@@ -199,9 +201,22 @@ def _rows_from_budget_actuals(df: pd.DataFrame) -> List[Dict[str, Any]]:
             colmap["cost_code"] = c
         elif k in ["category", "cost_category", "type"]:
             colmap["category"] = c
-        elif k in ["budget", "budget_sar", "budget amount", "budget_amt"]:
+        elif k in [
+            "budget",
+            "budget_sar",
+            "budget amount",
+            "budget_amt",
+            "planned",
+            "planned_budget",
+        ]:
             colmap["budget_sar"] = c
-        elif k in ["actual", "actual_sar", "actual amount", "actual_amt"]:
+        elif k in [
+            "actual",
+            "actual_sar",
+            "actual amount",
+            "actual_amt",
+            "spent",
+        ]:
             colmap["actual_sar"] = c
 
     out: List[Dict[str, Any]] = []
@@ -229,6 +244,36 @@ def _rows_from_budget_actuals(df: pd.DataFrame) -> List[Dict[str, Any]]:
             continue
         out.append(item)
     return out
+
+
+def _rows_from_budget_actuals_text(text: str) -> List[Dict[str, Any]]:
+    """Parse free-form text lines for budget vs actual pairs."""
+    rows: List[Dict[str, Any]] = []
+    if not text.strip():
+        return rows
+    budget_re = re.compile(r"(budget|planned)[^0-9]*([0-9][0-9,\.]+)", re.I)
+    actual_re = re.compile(r"(actual|spent)[^0-9]*([0-9][0-9,\.]+)", re.I)
+    for line in text.splitlines():
+        b_match = budget_re.search(line)
+        a_match = actual_re.search(line)
+        if not (b_match and a_match):
+            continue
+        try:
+            budget = float(b_match.group(2).replace(",", ""))
+            actual = float(a_match.group(2).replace(",", ""))
+        except Exception:
+            continue
+        rows.append(
+            {
+                "project_id": None,
+                "period": None,
+                "cost_code": None,
+                "category": None,
+                "budget_sar": budget,
+                "actual_sar": actual,
+            }
+        )
+    return rows
 
 
 def _rows_from_text(text: str) -> List[Dict[str, Any]]:
@@ -634,6 +679,7 @@ async def upload(
         name = data_file.filename or "upload"
         rows: List[Dict[str, Any]] = []
         mode = "change_orders"
+        text = ""
         df = _df_from_bytes(name, data)
         if not df.empty:
             co_rows = _rows_from_tablelike(df)
@@ -648,22 +694,33 @@ async def upload(
                 rows = []
         if not rows:
             text = _text_from_bytes(name, data)
-            rows = _rows_from_text(text)
-            if not rows:
-                for it in _extract_rows_via_llm(text):
-                    rows.append({
-                        "project_id": None,
-                        "linked_cost_code": None,
-                        "description": it.get("description"),
-                        "file_link": None,
-                        "co_id": it.get("co_id"),
-                        "date": None,
-                        "amount_sar": it.get("amount_sar"),
-                        "vendor_name": None,
-                    })
+            ba_text = _rows_from_budget_actuals_text(text)
+            if ba_text:
+                rows = ba_text
+                mode = "budget_actuals"
+            else:
+                rows = _rows_from_text(text)
+                if not rows:
+                    for it in _extract_rows_via_llm(text):
+                        rows.append({
+                            "project_id": None,
+                            "linked_cost_code": None,
+                            "description": it.get("description"),
+                            "file_link": None,
+                            "co_id": it.get("co_id"),
+                            "date": None,
+                            "amount_sar": it.get("amount_sar"),
+                            "vendor_name": None,
+                        })
         filtered = [
             r for r in rows if any(v is not None and str(v).strip() != "" for v in r.values())
         ]
+        if mode != "budget_actuals" and (
+            not filtered or not any(r.get("amount_sar") for r in filtered)
+        ):
+            if (text or "").strip():
+                summary = textwrap.shorten((text or "").strip(), width=200, placeholder="...")
+                return {"mode": "summary", "summary": summary}
         if mode == "budget_actuals":
             if not filtered:
                 return {
