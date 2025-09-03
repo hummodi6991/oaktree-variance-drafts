@@ -8,6 +8,10 @@ import statistics
 from typing import Any, Dict, List, Optional
 import re
 import textwrap
+import time
+import asyncio
+import platform
+import logging
 
 import chardet
 import pandas as pd
@@ -32,9 +36,11 @@ from fastapi import (
     HTTPException,
     UploadFile,
     Form,
+    Request,
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 
 from .schemas import DraftRequest, DraftResponse, ProcurementItem, VendorSnapshot
@@ -46,6 +52,73 @@ from .llm.extract_from_text import extract_items_via_llm
 from app.parsers.single_file import analyze_single_file
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
+
+logger = logging.getLogger("uvicorn.error")
+
+
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        rid = request.headers.get("x-request-id") or str(uuid.uuid4())
+        request.state.request_id = rid
+        start = time.time()
+        try:
+            resp = await call_next(request)
+            return resp
+        except Exception as e:  # pragma: no cover - defensive
+            logger.exception("Unhandled error [%s] %s", rid, request.url.path)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "ok": False,
+                    "error": "internal_error",
+                    "detail": str(e)[:400],
+                    "stage": "unhandled_exception",
+                    "request_id": rid,
+                },
+            )
+        finally:
+            dur = int((time.time() - start) * 1000)
+            logger.info("%s %s %s %sms", rid, request.method, request.url.path, dur)
+
+
+app.add_middleware(RequestContextMiddleware)
+
+
+def _mask(val: str | None, keep: int = 8):
+    if not val:
+        return None
+    return (val[:keep] + "…") if len(val) > keep else val
+
+
+@app.get("/diag/health")
+def diag_health(request: Request):
+    return {
+        "ok": True,
+        "request_id": request.state.request_id,
+        "runtime": {"python": platform.python_version()},
+        "env": {
+            "OPENAI_MODEL": os.getenv("OPENAI_MODEL"),
+            "OPENAI_BASE_URL": os.getenv("OPENAI_BASE_URL"),
+            "REQUIRE_API_KEY": os.getenv("REQUIRE_API_KEY", "true"),
+        },
+        "version": os.getenv("GIT_COMMIT", "unknown"),
+    }
+
+
+@app.get("/diag/openai")
+def diag_openai(request: Request):
+    key = os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
+    return {
+        "ok": bool(key),
+        "request_id": request.state.request_id,
+        "key_prefix": _mask(key),
+        "endpoint": os.getenv("OPENAI_BASE_URL") or "https://api.openai.com",
+        "model": os.getenv("OPENAI_MODEL"),
+        "hint": None
+        if key
+        else "Set OPENAI_API_KEY (or AZURE_OPENAI_API_KEY) in App Settings.",
+    }
+
 
 SAFE_CO_COLS = [
     "co_id",
@@ -556,25 +629,6 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/diag/openai")
-def diag_openai():
-    """Quick connectivity check to the model provider."""
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    try:
-        import time
-        from openai import OpenAI
-
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        timeout = int(os.getenv("OPENAI_TIMEOUT", "10"))
-        client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
-        t0 = time.time()
-        resp = client.responses.create(model=model, input="ping")
-        ms = int((time.time() - t0) * 1000)
-        return {"ok": True, "model": model, "latency_ms": ms, "id": getattr(resp, "id", None)}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "model": model, "error": str(e)})
-
-
 # -------- Job tracking --------
 class JobStatus(BaseModel):
     job_id: str
@@ -1053,3 +1107,88 @@ async def drafts_from_file(
         return JSONResponse(parsed)
 
     return JSONResponse({"procurement_summary": {"items": [], "meta": {}}})
+
+
+# ---------------- In-memory job store (lightweight) ------------------------
+JOBS: dict[str, dict] = {}
+
+
+def jobs_put(jid: str, **k):
+    d = JOBS.setdefault(jid, {"status": "queued"})
+    d.update(k)
+    JOBS[jid] = d
+    return d
+
+
+@app.get("/jobs/{job_id}")
+def jobs_get(job_id: str, request: Request):
+    j = JOBS.get(job_id)
+    if not j:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": "job_not_found", "request_id": request.state.request_id},
+        )
+    j["request_id"] = request.state.request_id
+    return j
+
+
+@app.post("/singlefile/generate-async")
+async def generate_from_file_async(request: Request, file: UploadFile = File(...)):
+    rid = getattr(request.state, "request_id", str(uuid.uuid4()))
+    if not file:
+        raise HTTPException(status_code=400, detail="no_file")
+    name = (file.filename or "").lower()
+    raw = await file.read()
+    if not raw:
+        return {"ok": False, "error": "empty_file", "stage": "upload", "request_id": rid}
+
+    import mimetypes
+
+    mime = file.content_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+    job_id = str(uuid.uuid4())
+    jobs_put(
+        job_id,
+        ok=False,
+        status="queued",
+        started_at=time.time(),
+        file=name,
+        mime=mime,
+        stage="queued",
+    )
+
+    async def _worker():
+        t0 = time.time()
+        try:
+            jobs_put(job_id, status="parsing", stage="parsing")
+            result = await asyncio.to_thread(process_single_file, name, raw)
+            jobs_put(
+                job_id,
+                ok=True,
+                status="done",
+                stage="done",
+                timings_ms={"total": int((time.time() - t0) * 1000)},
+                payload=result,
+            )
+        except ValueError as ve:
+            jobs_put(
+                job_id,
+                ok=False,
+                status="error",
+                stage="validation",
+                error="validation_error",
+                detail=str(ve),
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            logger.exception("Single-file job failed [%s]", job_id)
+            jobs_put(
+                job_id,
+                ok=False,
+                status="error",
+                stage="processing",
+                error="processing_failed",
+                detail=str(e)[:400],
+            )
+
+    asyncio.create_task(_worker())
+    return {"ok": True, "job_id": job_id, "request_id": rid}

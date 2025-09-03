@@ -4,18 +4,31 @@ function generateFromSingleFile() {
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file);
-  fd.append('bilingual', document.getElementById('opt_bilingual').checked ? 'true':'false');
-  fd.append('no_speculation', document.getElementById('opt_nospec').checked ? 'true':'false');
-  fetch('/singlefile/analyze', { method: 'POST', body: fd })
-    .then(r => r.json())
-    .then(data => {
-      if (data.report_type === 'procurement_summary') {
-        renderProcurementCards(data);
-      } else if (data.report_type === 'variance_insights') {
-        renderVarianceInsights(data);
-      } else {
-        showResultJSON(data);
-      }
+  fetch('/singlefile/generate-async', { method: 'POST', body: fd })
+    .then(r => r.json().then(j => ({ ok: r.ok, body: j })))
+    .then(({ ok, body }) => {
+      if (!ok || !body.ok) { showError(body.error || 'upload_failed'); return; }
+      const jobId = body.job_id;
+      const t0 = Date.now();
+      const poll = () => {
+        fetch(`/jobs/${jobId}`)
+          .then(r => r.json())
+          .then(jr => {
+            const d = document.getElementById('diag-body');
+            if (d) { d.textContent = JSON.stringify(jr, null, 2); document.getElementById('diag').open = true; }
+            if (jr.status === 'done' && jr.ok) {
+              showResultJSON(jr.payload || {});
+            } else if (jr.status === 'error') {
+              showError(`${jr.stage}: ${jr.error}`);
+            } else if (Date.now() - t0 < 210000) {
+              setTimeout(poll, 1500);
+            } else {
+              showError('processing_timeout');
+            }
+          })
+          .catch(e => showError(e));
+      };
+      poll();
     })
     .catch(e => showError(e));
 }
