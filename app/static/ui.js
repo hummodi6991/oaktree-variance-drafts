@@ -1,22 +1,28 @@
-// Single-file: call /singlefile/analyze and render Procurement Summary cards when returned
-function generateFromSingleFile() {
+// Single-file: call /drafts/from-file and render cards when returned
+async function generateFromSingleFile() {
   const file = document.getElementById('single_file_input').files[0];
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file);
-  fetch('/singlefile/analyze', { method: 'POST', body: fd })
-    .then(r => r.json().then(j => ({ ok: r.ok, body: j })))
-    .then(({ ok, body }) => {
-      if (!ok) { showError(body.error || 'upload_failed'); return; }
-      if (body.report_type === 'procurement_summary') {
-        renderProcurementCards(body);
-      } else if (body.report_type === 'variance_insights') {
-        renderVarianceInsights(body);
-      } else {
-        showResultJSON(body);
-      }
-    })
-    .catch(e => showError(e));
+  try {
+    const resp = await fetch('/drafts/from-file', { method: 'POST', body: fd });
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (data.error) {
+      renderSingleFileError(data.error);
+      return;
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (data.report_type === 'procurement_summary') {
+      renderProcurementCards(data);
+    } else if (data.report_type === 'variance_insights') {
+      renderVarianceInsights(data);
+    } else {
+      showResultJSON(data);
+    }
+  } catch (e) {
+    showError(e);
+  }
 }
 
 function renderProcurementCards(data) {
@@ -45,6 +51,10 @@ function showResultJSON(data) {
 function showError(e) {
   const box = document.getElementById('result_box');
   box.textContent = 'Error: ' + (e.message || e);
+}
+
+function renderSingleFileError(e) {
+  showError(e);
 }
 
 function renderVarianceInsights(data) {
