@@ -141,3 +141,15 @@ def test_pdf_fallback(monkeypatch):
     assert data["count"] == 2
     assert data["total_amount_sar"] == 300
     assert len(data["procurement_summary"]) == 2
+
+
+def test_upload_llm_failure(monkeypatch):
+    """Ensure missing LLM does not crash single-file upload."""
+    client = TestClient(app)
+    monkeypatch.setattr("app.main.extract_items_via_llm", lambda *_: (_ for _ in ()).throw(RuntimeError("no model")))
+    files = {"data_file": ("empty.pdf", b"", "application/pdf")}
+    resp = client.post("/upload", files=files, data={"api_key": "testkey"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 0
+    assert data["procurement_summary"] == []

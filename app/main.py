@@ -198,6 +198,14 @@ def _rows_from_text(text: str) -> List[Dict[str, Any]]:
     return rows
 
 
+def _extract_rows_via_llm(text: str) -> List[Dict[str, Any]]:
+    """Fallback extraction via LLM; swallow errors if model unavailable."""
+    try:
+        return extract_items_via_llm(text)
+    except Exception:
+        return []
+
+
 def _build_procurement_summary(rows: List[Dict[str, Any]], bilingual: bool = True) -> List[ProcurementItem]:
     """Convert raw row dicts to ProcurementItem cards."""
     out: List[ProcurementItem] = []
@@ -349,7 +357,7 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
             text = _text_from_bytes(name, data)
             rows = _rows_from_text(text)
             if not rows:
-                for it in extract_items_via_llm(text):
+                for it in _extract_rows_via_llm(text):
                     rows.append({
                         "project_id": None,
                         "linked_cost_code": None,
@@ -368,7 +376,7 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
                 text = _text_from_bytes(name, data)
                 rows = _rows_from_text(text)
                 if not rows:
-                    for it in extract_items_via_llm(text):
+                    for it in _extract_rows_via_llm(text):
                         rows.append({
                             "project_id": None,
                             "linked_cost_code": None,
@@ -545,7 +553,7 @@ async def upload(
             text = _text_from_bytes(name, data)
             rows = _rows_from_text(text)
             if not rows:
-                for it in extract_items_via_llm(text):
+                for it in _extract_rows_via_llm(text):
                     rows.append({
                         "project_id": None,
                         "linked_cost_code": None,
