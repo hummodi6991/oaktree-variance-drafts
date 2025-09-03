@@ -1,4 +1,4 @@
-// Single-file: call /drafts/from-file and render cards when returned
+// Single-file: call /drafts/from-file and render cards when returned (robust error handling)
 async function generateFromSingleFile() {
   const file = document.getElementById('single_file_input').files[0];
   if (!file) return;
@@ -7,12 +7,15 @@ async function generateFromSingleFile() {
   try {
     const resp = await fetch('/drafts/from-file', { method: 'POST', body: fd });
     let data = {};
-    try { data = await resp.json(); } catch (_) {}
-    if (data.error) {
+    try { data = await resp.json(); } catch (_) { /* non-JSON or timeout */ }
+    if (!resp.ok) {
+      renderSingleFileError((data && data.error) ? data.error : `Request failed (HTTP ${resp.status})`);
+      return;
+    }
+    if (data && data.error) {
       renderSingleFileError(data.error);
       return;
     }
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     if (data.report_type === 'procurement_summary') {
       renderProcurementCards(data);
     } else if (data.report_type === 'variance_insights') {
