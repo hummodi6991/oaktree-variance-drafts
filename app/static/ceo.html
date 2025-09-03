@@ -36,6 +36,16 @@
   <h3>Result</h3>
   <pre id="resultArea">{}</pre>
 </div>
+
+<div class="card" style="margin-top:20px;">
+  <h3>Single Data File</h3>
+  <p>Upload a single procurement or report file. If both Budget and Actual are found, variances will be calculated; otherwise a procurement/general summary is produced.</p>
+  <input id="single_file" type="file" accept=".csv,.xlsx,.xls,.docx,.pdf,.txt,.md,.rtf" />
+  <div style="margin-top:10px;">
+    <button onclick="onSingleProcess()">Process file</button>
+  </div>
+  <div id="single_result" style="margin-top:10px;"></div>
+</div>
 <script>
 const ui = {
   btn: document.getElementById('generateBtn'),
@@ -108,5 +118,115 @@ ui.btn.onclick = async () => {
     ui.btn.disabled = false;
   }
 };
+
+const esc = (s) => (s == null ? '' : String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])));
+
+async function postSingleFile(url, file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch(url, { method: 'POST', body: fd });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function renderProcurementSummary(items, drafts) {
+  const host = document.getElementById("single_result");
+  if (!items || !items.length) {
+    host.innerHTML = `<div class="warn">No extractable items found in the file.</div>`;
+    return;
+  }
+  let html = `<h4>Procurement / General Summary</h4>`;
+  for (let i=0;i<items.length;i++) {
+    const it = items[i] || {};
+    const d  = (drafts && drafts[i]) || {};
+    html += `
+      <div class="card" style="margin:10px 0;">
+        <div style="font-weight:600;margin-bottom:4px;">Item ${i+1}</div>
+        <div style="font-size:14px;opacity:.85">
+          ${it.item_code ? `<div>Item code: ${esc(it.item_code)}</div>` : ``}
+          ${it.description ? `<div>Description: ${esc(it.description)}</div>` : ``}
+          ${it.qty != null ? `<div>Quantity: ${esc(it.qty)}</div>` : ``}
+          ${it.unit_price_sar != null ? `<div>Unit price (SAR): ${esc(it.unit_price_sar)}</div>` : ``}
+          ${it.amount_sar != null ? `<div>Line total (SAR): ${esc(it.amount_sar)}</div>` : ``}
+          ${it.vendor ? `<div>Vendor: ${esc(it.vendor)}</div>` : ``}
+          ${it.doc_date ? `<div>Document date: ${esc(it.doc_date)}</div>` : ``}
+          <div>Evidence: Uploaded procurement file</div>
+        </div>
+        <div style="margin-top:8px;">
+          <div><strong>Draft (EN):</strong> ${esc(d.en || "")}</div>
+          <div><strong>المسودة (AR):</strong> ${esc(d.ar || "")}</div>
+        </div>
+      </div>
+    `;
+  }
+  host.innerHTML = html;
+}
+
+function renderVarianceInsights(resp) {
+  const host = document.getElementById("single_result");
+  const v = resp.variances || [];
+  const ins = resp.insights || {};
+  let html = `<h4>Variance Insights</h4>
+    <div class="card" style="margin:10px 0;padding:8px 10px;font-size:14px;">
+      <div>Total Budget (SAR): <b>${esc(ins.total_budget)}</b></div>
+      <div>Total Actual (SAR): <b>${esc(ins.total_actual)}</b></div>
+      <div>Total Variance (SAR): <b>${esc(ins.total_variance)}</b></div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-top:6px;">
+      <thead><tr>
+        <th style="text-align:left">Project</th>
+        <th style="text-align:left">Period</th>
+        <th style="text-align:left">Cost Code</th>
+        <th style="text-align:left">Description</th>
+        <th style="text-align:right">Budget</th>
+        <th style="text-align:right">Actual</th>
+        <th style="text-align:right">Variance</th>
+      </tr></thead><tbody>`;
+  for (const r of v) {
+    html += `<tr>
+      <td>${esc(r.project_id||"")}</td>
+      <td>${esc(r.period||"")}</td>
+      <td>${esc(r.cost_code||"")}</td>
+      <td>${esc(r.description||"")}</td>
+      <td style="text-align:right">${esc(r.budget_sar)}</td>
+      <td style="text-align:right">${esc(r.actual_sar)}</td>
+      <td style="text-align:right">${esc(r.variance_sar)}</td>
+    </tr>`;
+  }
+  html += `</tbody></table>`;
+
+  const inc = (ins.top_increases||[]).slice(0,5);
+  const dec = (ins.top_decreases||[]).slice(0,5);
+  if (inc.length || dec.length) {
+    html += `<div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;">
+      <div class="card" style="flex:1;min-width:260px;"><h5>Top Increases</h5>${
+        inc.map(x=>`<div>${esc(x.cost_code||x.description||"")} — <b>${esc(x.variance_sar)}</b></div>`).join("")||"<div>—</div>"}</div>
+      <div class="card" style="flex:1;min-width:260px;"><h5>Top Decreases</h5>${
+        dec.map(x=>`<div>${esc(x.cost_code||x.description||"")} — <b>${esc(x.variance_sar)}</b></div>`).join("")||"<div>—</div>"}</div>
+    </div>`;
+  }
+  host.innerHTML = html;
+}
+
+async function onSingleProcess() {
+  const input = document.getElementById("single_file");
+  const host  = document.getElementById("single_result");
+  if (!input.files || input.files.length === 0) {
+    host.textContent = "Please choose a file.";
+    return;
+  }
+  host.textContent = "Processing…";
+  try {
+    const res = await postSingleFile("/singlefile/report", input.files[0]);
+    if (res.mode === "variance") {
+      renderVarianceInsights(res);
+    } else {
+      renderProcurementSummary(res.items || [], res.drafts || []);
+    }
+  } catch (e) {
+    host.textContent = "Failed to process file. Check server logs.";
+    console.error(e);
+  }
+}
 </script>
 </html>
