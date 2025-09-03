@@ -305,6 +305,7 @@
   }
 
   window.__free_rows__ = [];
+  window.__free_mode__ = 'change_orders';
 
   async function doFreeformPreview() {
     const inp = document.getElementById('freeform_files');
@@ -312,8 +313,9 @@
     if (!inp.files.length) { box.style.display='block'; box.textContent='No files selected.'; return; }
     const out = await postFiles('/extract/freeform', inp.files);
     window.__free_rows__ = out.rows || [];
+    window.__free_mode__ = out.mode || 'change_orders';
     box.style.display='block';
-    box.textContent = JSON.stringify({rows: window.__free_rows__.slice(0,10), total: window.__free_rows__.length}, null, 2);
+    box.textContent = JSON.stringify({mode: window.__free_mode__, rows: window.__free_rows__.slice(0,10), total: window.__free_rows__.length}, null, 2);
   }
 
   async function doFreeformGenerate() {
@@ -322,6 +324,7 @@
     if (!window.__free_rows__.length && inp.files.length) {
       const out = await postFiles('/extract/freeform', inp.files);
       window.__free_rows__ = out.rows || [];
+      window.__free_mode__ = out.mode || 'change_orders';
     }
     const cfg = {
       materiality_pct: Number(el('mat_pct').value || 5),
@@ -330,8 +333,8 @@
       enforce_no_speculation: el('no_spec').checked,
     };
     const payload = {
-      budget_actuals: [],
-      change_orders: window.__free_rows__ || [],
+      budget_actuals: window.__free_mode__ === 'budget_actuals' ? window.__free_rows__ : [],
+      change_orders: window.__free_mode__ === 'change_orders' ? window.__free_rows__ : [],
       vendor_map: [],
       category_map: [],
       config: cfg,
