@@ -1,16 +1,28 @@
 from fastapi import APIRouter, UploadFile, File
 import asyncio
+from typing import Dict, Any, List
+
 from app.parsers.procurement_pdf import parse_procurement_pdf
 from app.services.singlefile import process_single_file
+from app.services.insights import compute_procurement_insights
 
 router = APIRouter()
 
+
 @router.post("/drafts/from-file")
 async def from_file(file: UploadFile = File(...)):
+    """
+    Behavior:
+      - If the uploaded file contains budget/actuals → return variance.
+      - Otherwise, if it contains procurement lines → return procurement summary + insights.
+      - If neither detected → return a helpful error message.
+    """
     try:
         data = await file.read()
         is_pdf = file.filename.lower().endswith(".pdf")
+
         if is_pdf:
+            # Parse PDFs in a worker thread with a hard timeout to avoid hangs/502s.
             try:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(parse_procurement_pdf, data),
@@ -18,12 +30,48 @@ async def from_file(file: UploadFile = File(...)):
                 )
             except asyncio.TimeoutError:
                 return {"error": "PDF parsing timed out after 25 seconds."}
+
+            items = (result or {}).get("items") or []
+            if items:
+                insights = compute_procurement_insights(items)
+                return {
+                    "kind": "procurement",
+                    "message": "No budget/actuals detected — showing procurement summary.",
+                    "procurement_summary": {"items": items},
+                    "insights": insights,
+                    "meta": (result or {}).get("meta", {}),
+                }
             return {
-                "procurement_summary": {"items": result.get("items", [])},
-                "meta": result.get("meta", {})
+                "error": "We didn’t find budget/actuals or recognizable procurement lines in this PDF."
             }
+
+        # Non-PDF (CSV/Excel/Word/Text)
         processed = await asyncio.to_thread(process_single_file, file.filename, data)
-        return processed
+        processed = processed or {}
+
+        if processed.get("mode") == "variance":
+            variance_items = processed.get("variances") or []
+            return {
+                "kind": "variance",
+                "variance_items": variance_items,
+                "insights": processed.get("insights", {}),
+            }
+
+        items = processed.get("items") or []
+        if items:
+            insights = compute_procurement_insights(items)
+            return {
+                "kind": "procurement",
+                "message": "No budget/actuals detected — showing procurement summary.",
+                "procurement_summary": {"items": items},
+                "insights": insights,
+            }
+
+        return {
+            "error": "This file does not include budget/actuals or procurement lines I can read."
+        }
+
     except Exception as e:
-        # Surface as JSON the UI can show instead of crashing upstream (502).
+        # Never bubble up to a 502 — surface as a structured response the UI can display.
         return {"error": f"single-file parse failed: {type(e).__name__}: {e}"}
+
