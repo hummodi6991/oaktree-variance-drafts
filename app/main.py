@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from .schemas import DraftRequest, DraftResponse, ProcurementItem, VendorSnapshot
 from .pipeline import generate_drafts
 from .services.csv_loader import parse_tabular
+from app.services.singlefile import process_single_file, draft_bilingual_procurement_card
 from .llm.extract_from_text import extract_items_via_llm
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
@@ -987,3 +988,22 @@ async def drafts_upload(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Draft generation failed: {e}")
+
+
+# --- Single Data File endpoint (extended) ---
+from fastapi import UploadFile, File
+from typing import Dict, Any
+
+
+@app.post("/singlefile/report")
+async def singlefile_report(file: UploadFile = File(...)) -> Dict[str,Any]:
+    """
+    If Budget+Actual found -> {"mode":"variance","variances":[...], "insights": {...}}
+    Else -> {"mode":"summary","items":[...,"drafts":[{en,ar},...] ]}
+    """
+    data = await file.read()
+    res = process_single_file(file.filename or "upload.bin", data)
+    if res.get("mode") == "summary":
+        items = res.get("items", [])
+        res["drafts"] = [draft_bilingual_procurement_card(it, "Uploaded procurement file") for it in items]
+    return res
