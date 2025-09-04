@@ -43,8 +43,20 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
   # CSV/Excel -> try variance; if not possible, summarize rows
   if name.endswith(".csv"):
     df = pd.read_csv(io.BytesIO(data))
+    df = _map_cols(df)
   elif name.endswith(".xlsx") or name.endswith(".xls"):
-    df = pd.read_excel(io.BytesIO(data))
+    # Read all sheets and combine those containing budget/actual columns
+    sheets = pd.read_excel(io.BytesIO(data), sheet_name=None)
+    frames: List[pd.DataFrame] = []
+    for sh in sheets.values():
+      mapped = _map_cols(sh)
+      if _has_budget_actual(mapped):
+        frames.append(mapped)
+    if frames:
+      df = pd.concat(frames, ignore_index=True)
+    else:
+      first = next(iter(sheets.values()), pd.DataFrame())
+      df = _map_cols(first)
   else:
     # plain text fallback
     text = data.decode("utf-8", errors="ignore")
