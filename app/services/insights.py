@@ -1,9 +1,7 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 import pandas as pd
-import numpy as np
 import math
-import re
 from collections import Counter, defaultdict
 
 # ---------- Helpers ----------
@@ -135,7 +133,7 @@ def generate_insights_for_workbook(sheets: Dict[str, pd.DataFrame]) -> Dict[str,
         # Domain-aware cost insights
         low = _lowset(df.columns)
         c_amount = _pick_amount_col(low)
-        c_qty = _pick_qty_col(low)
+        _ = _pick_qty_col(low)
         c_uprice = _pick_unit_price_col(low)
         c_vendor = _pick_vendor_col(low)
         c_desc = _pick_desc_col(low)
@@ -175,7 +173,8 @@ def generate_insights_for_workbook(sheets: Dict[str, pd.DataFrame]) -> Dict[str,
                         continue
                     umin = grp.loc[grp["_u"].idxmin()]
                     umax = grp.loc[grp["_u"].idxmax()]
-                    min_u = float(umin["_u"]); max_u = float(umax["_u"])
+                    min_u = float(umin["_u"])
+                    max_u = float(umax["_u"])
                     if min_u <= 0: 
                         continue
                     spread_pct = (max_u/min_u - 1.0) * 100.0
@@ -251,4 +250,51 @@ def compute_procurement_insights(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "totals_per_vendor": [{"vendor": v, "total_sar": round(t, 2)} for v, t in vendor_totals_sorted],
         "top_lines_by_amount": top_lines,
+    }
+
+
+# --- Variance insights for Budget vs Actual ---
+def compute_variance_insights(variance_items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Rollups for Budget vs Actual variance rows produced by the single-file track.
+    Each item is expected to contain keys: label, budget_sar, actual_sar, variance_sar.
+    """
+    rows: List[Dict[str, Any]] = []
+    tot_budget = 0.0
+    tot_actual = 0.0
+    for r in variance_items:
+        try:
+            b = float(r.get("budget_sar")) if r.get("budget_sar") is not None else None
+            a = float(r.get("actual_sar")) if r.get("actual_sar") is not None else None
+            v = float(r.get("variance_sar")) if r.get("variance_sar") is not None else (
+                a - b if a is not None and b is not None else None
+            )
+        except Exception:
+            b = a = v = None
+        rows.append({**r, "budget_sar": b, "actual_sar": a, "variance_sar": v})
+        if b is not None:
+            tot_budget += b
+        if a is not None:
+            tot_actual += a
+
+    tot_variance = (tot_actual - tot_budget) if (not math.isnan(tot_actual) and not math.isnan(tot_budget)) else None
+    over = [r for r in rows if r.get("variance_sar") is not None and r.get("variance_sar") > 0]
+    under = [r for r in rows if r.get("variance_sar") is not None and r.get("variance_sar") < 0]
+    top_overruns = sorted(over, key=lambda r: r["variance_sar"], reverse=True)[:10]
+    top_underruns = sorted(under, key=lambda r: r["variance_sar"])[:10]
+
+    pct_overrun = None
+    try:
+        pct_overrun = ((tot_actual - tot_budget) / tot_budget * 100.0) if tot_budget else None
+    except Exception:
+        pct_overrun = None
+
+    return {
+        "summary": {
+            "total_budget_sar": round(tot_budget, 2),
+            "total_actual_sar": round(tot_actual, 2),
+            "total_variance_sar": round(tot_variance, 2) if tot_variance is not None else None,
+            "overall_overrun_pct": round(pct_overrun, 2) if pct_overrun is not None else None,
+        },
+        "top_overruns": top_overruns,
+        "top_underruns": top_underruns,
     }

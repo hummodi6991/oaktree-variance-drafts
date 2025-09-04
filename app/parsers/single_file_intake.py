@@ -1,28 +1,28 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import io
 import pandas as pd
 from docx import Document
 from app.utils.diagnostics import DiagnosticContext
 from .procurement_pdf import parse_procurement_pdf
+import re
+import pdfplumber
 
 # Column synonym maps for tolerant CSV/Excel intake
 MAP = {
   "budget": {"budget","budget_sar","planned","plan","budget_value","planned_sar"},
   "actual": {"actual","actuals","spent","spend","actual_sar","cost_to_date","ctd"},
-  "project_id": {"project","project_id","job","job_id","project name"},
-  "period": {"period","month","date"},
-  "cost_code": {"cost_code","code","account","gl","linked_cost_code"},
-  "category": {"category","cat","trade"}
+  "label": {"label","item","description","cost_code","category","project_id","name"}
 }
 
 def _map_cols(df: pd.DataFrame) -> pd.DataFrame:
   lower = {c: c.strip().lower() for c in df.columns}
-  rename = {}
-  inv = {k: set(v) for k,v in MAP.items()}
-  for std, alts in inv.items():
+  rename: Dict[str, str] = {}
+  used = {c.lower() for c in df.columns}
+  for std, alts in MAP.items():
     for col, low in lower.items():
-      if low in alts and std not in df.columns:
+      if low in alts and std not in used:
         rename[col] = std
+        used.add(std)
   if rename:
     df = df.rename(columns=rename)
   return df
@@ -31,12 +31,74 @@ def _has_budget_actual(df: pd.DataFrame) -> bool:
   cols = {c.lower() for c in df.columns}
   return bool(MAP["budget"] & cols) and bool(MAP["actual"] & cols)
 
+def _strip_num(x: Any) -> Optional[float]:
+  try:
+    if x is None:
+      return None
+    s = str(x)
+    s = re.sub(r"[^\d\.\-]", "", s).strip()
+    return float(s) if s not in ("", "-", ".", "-.") else None
+  except Exception:
+    return None
+
+def _emit_variance_rows(df: pd.DataFrame) -> List[Dict[str, Any]]:
+  """Given a DF that already has 'budget' and 'actual' standardized, emit variance rows."""
+  df = df.copy()
+  label_col = next((c for c in ["label","item","description","cost_code","category","project_id"] if c in df.columns), None)
+  bcol = next((c for c in ["budget","budget_sar"] if c in df.columns), None)
+  acol = next((c for c in ["actual","actuals","actual_sar","spent","spend","cost_to_date","ctd"] if c in df.columns), None)
+  if not (bcol and acol):
+    return []
+  df[bcol] = df[bcol].apply(_strip_num)
+  df[acol] = df[acol].apply(_strip_num)
+  out: List[Dict[str, Any]] = []
+  for _, r in df.iterrows():
+    b = r.get(bcol)
+    a = r.get(acol)
+    if b is None and a is None:
+      continue
+    try:
+      out.append({
+        "label": str(r.get(label_col) or r.get("item") or r.get("description") or "Line"),
+        "budget_sar": b,
+        "actual_sar": a,
+        "variance_sar": (a - b) if (a is not None and b is not None) else None,
+      })
+    except Exception:
+      continue
+  return out
+
 def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
   name = (filename or "").lower()
   with DiagnosticContext(file_name=filename, file_size=len(data)) as diag:
     diag.step("start", filename=name)
     if name.endswith(".pdf"):
+      # New: attempt Budget/Actual detection from PDF tables first
       diag.step("parse_pdf_start")
+      variance_rows: List[Dict[str, Any]] = []
+      try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+          tables_scanned = 0
+          for page in pdf.pages:
+            tbls = page.extract_tables() or []
+            for t in tbls:
+              tables_scanned += 1
+              try:
+                df = pd.DataFrame(t[1:], columns=[str(c).strip() for c in t[0]])
+              except Exception:
+                continue
+              df = _map_cols(df)
+              if _has_budget_actual(df):
+                variance_rows.extend(_emit_variance_rows(df))
+          diag.step("pdf_tables_scanned", tables=int(tables_scanned), variance_rows=int(len(variance_rows)))
+      except Exception as e:
+        diag.warn("pdf_table_scan_failed", error=str(e))
+
+      if variance_rows:
+        diag.step("mode_variance_pdf", rows=int(len(variance_rows)))
+        return {"variance_items": variance_rows, "diagnostics": diag.to_dict()}
+
+      # Fallback: procurement summary extraction from existing PDF parser
       ps = parse_procurement_pdf(data)
       diag.step("parse_pdf_success", items=len(ps.get("items", [])))
       return {"procurement_summary": ps, "diagnostics": diag.to_dict()}
@@ -84,30 +146,9 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
     df = _map_cols(df)
     diag.step("columns_mapped", columns=list(df.columns))
     if _has_budget_actual(df):
-      diag.step("mode_variance", rows=int(df.shape[0]))
-      df["variance_sar"] = df.filter(like="actual", axis=1).iloc[:,0] - df.filter(like="budget", axis=1).iloc[:,0]
-      bud = df.filter(like="budget", axis=1).iloc[:,0].abs().replace(0, pd.NA)
-      df["variance_pct"] = (df["variance_sar"] / bud * 100).round(2)
-      records = []
-      for _, r in df.iterrows():
-        records.append({
-          "variance": {
-            "project_id": r.get("project_id"),
-            "period": str(r.get("period")),
-            "category": r.get("category"),
-            "budget_sar": float(r.filter(like="budget").iloc[0]) if r.filter(like="budget").size else None,
-            "actual_sar": float(r.filter(like="actual").iloc[0]) if r.filter(like="actual").size else None,
-            "variance_sar": float(r.get("variance_sar")) if pd.notna(r.get("variance_sar")) else None,
-            "variance_pct": float(r.get("variance_pct")) if pd.notna(r.get("variance_pct")) else None,
-            "drivers": [],
-            "vendors": [],
-            "evidence_links": []
-          },
-          "draft_en": None,
-          "draft_ar": None,
-          "analyst_notes": None
-        })
-      return {"variance_items": records, "diagnostics": diag.to_dict()}
+      rows = _emit_variance_rows(df)
+      diag.step("mode_variance", rows=int(len(rows)))
+      return {"variance_items": rows, "diagnostics": diag.to_dict()}
     else:
       diag.step("mode_procurement_summary")
       items: List[Dict[str,Any]] = []

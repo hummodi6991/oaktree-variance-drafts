@@ -35,7 +35,7 @@ def test_drafts_from_file_multisheet_variance():
     data = resp.json()
     assert "variance_items" in data
     assert len(data["variance_items"]) == 1
-    v = data["variance_items"][0]["variance"]
+    v = data["variance_items"][0]
     assert v["budget_sar"] == 100.0
     assert v["actual_sar"] == 120.0
     assert v["variance_sar"] == 20.0
