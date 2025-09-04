@@ -70,6 +70,15 @@ async def from_file(file: UploadFile = File(...)):
                 "diagnostics": processed.get("diagnostics"),
             }
 
+        # NEW: Workbook-level insights (no budget/actuals and no recognizable line items)
+        if processed.get("mode") == "insights":
+            return {
+                "kind": "insights",
+                "insights": processed.get("insights", {}),
+                "diagnostics": processed.get("diagnostics"),
+                "message": processed.get("message"),
+            }
+
         items = processed.get("items") or []
         if items:
             insights = compute_procurement_insights(items)
