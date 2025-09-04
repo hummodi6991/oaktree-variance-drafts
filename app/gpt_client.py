@@ -44,8 +44,9 @@ def generate_draft(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str]:
     try:
         from openai import OpenAI
 
-        timeout = int(os.getenv("OPENAI_TIMEOUT", "10"))
-        client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
+        timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
+        retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
+        client = OpenAI(api_key=api_key, timeout=timeout, max_retries=retries)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt + ("\n\n" + ar_instr if ar_instr else "")},

@@ -24,3 +24,17 @@ Docs: `http://localhost:8000/docs`
 
 ## Example payload
 (see /data/templates for sample CSV/XLSX files and README for example JSON)
+
+## Environment variables
+The service exposes several knobs for timeouts and concurrency. All have safe defaults and may be overridden per deployment:
+
+```
+OPENAI_TIMEOUT=30       # seconds per OpenAI request
+OPENAI_MAX_RETRIES=2    # OpenAI client retries
+PDF_PARSE_TIMEOUT=45    # seconds to spend parsing PDFs
+
+WEB_CONCURRENCY=4       # Gunicorn worker processes
+WEB_THREADS=8           # threads per worker
+WEB_TIMEOUT=240         # request timeout in seconds
+WEB_KEEPALIVE=5         # keepalive in seconds
+```

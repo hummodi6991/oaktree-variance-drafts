@@ -52,11 +52,12 @@ from .schemas import (
 from .pipeline import generate_drafts
 from .services.csv_loader import parse_tabular
 from app.services.singlefile import process_single_file, draft_bilingual_procurement_card
-from app.parsers.single_file_intake import parse_single_file
 from .llm.extract_from_text import extract_items_via_llm
 from app.parsers.single_file import analyze_single_file
+from app.routers import drafts as drafts_router
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
+app.include_router(drafts_router.router)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -1090,20 +1091,6 @@ async def analyze_single_file_endpoint(
         bilingual=bilingual,
         no_speculation=no_speculation,
     )
-
-
-@app.post("/drafts/from-file")
-async def drafts_from_file(
-    file: UploadFile = File(...),
-    bilingual: bool = Form(True),
-    no_speculation: bool = Form(True),
-    materiality_pct: float = Form(5.0),
-    materiality_amount_sar: float = Form(100000.0),
-):
-    data = await file.read()
-    parsed = parse_single_file(file.filename, data)
-    status = 400 if parsed.get("error") else 200
-    return JSONResponse(parsed, status_code=status)
 
 
 # ---------------- In-memory job store (lightweight) ------------------------

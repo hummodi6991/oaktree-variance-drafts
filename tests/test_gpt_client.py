@@ -21,6 +21,7 @@ class DummyOpenAI:
 def test_generate_draft_timeout(monkeypatch):
     os.environ["OPENAI_API_KEY"] = "sk-test"
     os.environ["OPENAI_TIMEOUT"] = "1"
+    os.environ["OPENAI_MAX_RETRIES"] = "5"
     monkeypatch.setattr("openai.OpenAI", DummyOpenAI)
 
     v = VarianceItem(
@@ -38,7 +39,8 @@ def test_generate_draft_timeout(monkeypatch):
     en, ar = generate_draft(v, cfg)
     assert "variance" in en
     assert DummyOpenAI.last_kwargs["timeout"] == 1
-    assert DummyOpenAI.last_kwargs["max_retries"] == 0
+    assert DummyOpenAI.last_kwargs["max_retries"] == 5
     assert ar  # bilingual fallback text
     os.environ.pop("OPENAI_API_KEY")
     os.environ.pop("OPENAI_TIMEOUT")
+    os.environ.pop("OPENAI_MAX_RETRIES")
