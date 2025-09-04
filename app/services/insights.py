@@ -222,3 +222,33 @@ def generate_insights_for_workbook(sheets: Dict[str, pd.DataFrame]) -> Dict[str,
         "cards": cards,        # small KPI cards
         "highlights": highlights
     }
+
+
+def compute_procurement_insights(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Simple rollups for procurement line items.
+
+    Returns totals per vendor and top lines by amount to help the UI render
+    basic summaries when no budget/actual variance is present.
+    """
+    vendor_totals: Dict[str, float] = defaultdict(float)
+    top_lines: List[Dict[str, Any]] = []
+
+    for it in items:
+        amt = it.get("amount_sar")
+        try:
+            amt = float(amt) if amt is not None else None
+        except Exception:
+            amt = None
+        if amt is not None:
+            top_lines.append({**it, "amount_sar": amt})
+            ven = it.get("vendor_name") or it.get("vendor")
+            if ven:
+                vendor_totals[str(ven)] += amt
+
+    top_lines = sorted(top_lines, key=lambda r: r.get("amount_sar", 0), reverse=True)[:10]
+    vendor_totals_sorted = sorted(vendor_totals.items(), key=lambda kv: kv[1], reverse=True)
+
+    return {
+        "totals_per_vendor": [{"vendor": v, "total_sar": round(t, 2)} for v, t in vendor_totals_sorted],
+        "top_lines_by_amount": top_lines,
+    }
