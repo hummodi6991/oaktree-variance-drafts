@@ -180,6 +180,16 @@ function renderResult(payload) {
   if (payload.mode === 'insights' && payload.insights) {
     renderInsights(payload.insights);
   }
+  if (payload.mode === 'quote_compare' && payload.insights && payload.insights.highlights && payload.insights.highlights.length) {
+    const root = document.getElementById('results') || document.body;
+    const box = document.createElement('div');
+    box.style.marginTop = '8px';
+    const h = document.createElement('h3'); h.textContent = 'Highlights'; box.appendChild(h);
+    const ul = document.createElement('ul');
+    payload.insights.highlights.forEach(t => { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); });
+    box.appendChild(ul);
+    root.appendChild(box);
+  }
   if (payload.diagnostics) {
     renderDiagnostics(payload.diagnostics);
   }
