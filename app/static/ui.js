@@ -1,5 +1,5 @@
 async function generateFromSingleFile() {
-  const file = document.getElementById('single_file_input').files[0];
+  const file = document.getElementById("single-file-input").files[0];
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file);
@@ -17,7 +17,7 @@ async function generateFromSingleFile() {
     if (data.diagnostics) { renderDiagnostics(data.diagnostics); }
     return;
   }
-  if (data && (data.kind === 'quote_compare' || data.mode === 'quote_compare')) {
+  if (data && (data.kind === "quote_compare" || data.mode === "quote_compare")) {
     renderQuoteCompare(data);
     setStatus && setStatus('Done');
     return;
@@ -84,30 +84,38 @@ function renderQuoteCompare(data) {
   const root = document.getElementById('results') || document.body;
   root.innerHTML = '';
 
-  // Spreads / variance items
-  if (Array.isArray(data.variance_items) && data.variance_items.length) {
+  // Accept either "variance_items" or "spreads"
+  const rows = Array.isArray(data.variance_items) && data.variance_items.length
+    ? data.variance_items
+    : (Array.isArray(data.spreads) ? data.spreads : []);
+  if (rows.length) {
     const table = document.createElement('table');
     const head = document.createElement('thead');
-    head.innerHTML = '<tr><th>Item</th><th>Vendor</th><th>Quoted</th><th>Expected</th><th>Variance</th></tr>';
+    head.innerHTML = "<tr><th>Item</th><th>Min Vendor</th><th>Min Unit</th><th>Max Vendor</th><th>Max Unit</th><th>% Spread</th><th>Total Spread</th></tr>";
     table.appendChild(head);
     const body = document.createElement('tbody');
-    data.variance_items.forEach(v => {
+    rows.forEach(v => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${v.item ?? ''}</td>
-        <td>${v.vendor ?? ''}</td>
-        <td>${v.quoted ?? ''}</td>
-        <td>${v.expected ?? ''}</td>
-        <td>${v.variance ?? ''}</td>
-      `;
+        <td>${v.item_code ?? ""} ${v.description ?? ""}</td>
+        <td>${v.min_vendor ?? ""}</td>
+        <td>${v.min_unit_sar ?? ""}</td>
+        <td>${v.max_vendor ?? ""}</td>
+        <td>${v.max_unit_sar ?? ""}</td>
+        <td>${v.spread_pct ?? ""}%</td>
+        <td>${v.total_spread_sar ?? ""}</td>
+      `.trim();
       body.appendChild(tr);
     });
     table.appendChild(body);
     root.appendChild(table);
   }
 
-  // Vendor totals, if present
-  if (data.vendor_totals && Object.keys(data.vendor_totals).length) {
+  // Vendor totals (accept array or map)
+  const vtArray = Array.isArray(data.vendor_totals)
+    ? data.vendor_totals.map(r => ({ vendor_name: r.vendor_name ?? r.vendor ?? "", total_amount_sar: r.total_amount_sar ?? r.total ?? r.amount ?? 0 }))
+    : Object.entries(data.vendor_totals || {}).map(([vendor_name, total_amount_sar]) => ({ vendor_name, total_amount_sar }));
+  if (vtArray.length) {
     const h = document.createElement('h3');
     h.textContent = 'Vendor Totals';
     root.appendChild(h);
@@ -116,9 +124,9 @@ function renderQuoteCompare(data) {
     head2.innerHTML = '<tr><th>Vendor</th><th>Total</th></tr>';
     table2.appendChild(head2);
     const body2 = document.createElement('tbody');
-    Object.entries(data.vendor_totals).forEach(([vendor, total]) => {
+    vtArray.forEach(({ vendor_name, total_amount_sar }) => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${vendor}</td><td>${total}</td>`;
+      tr.innerHTML = `<td>${vendor_name}</td><td>${total_amount_sar}</td>`;
       body2.appendChild(tr);
     });
     table2.appendChild(body2);
