@@ -1,10 +1,12 @@
 from __future__ import annotations
-import io, re, json
+import re, json
 from typing import List, Dict, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
 import chardet
 import sys
+import io
+from app.services.doors_quotes_adapter import is_doors_quotes_workbook, adapt as adapt_doors_quotes
 from app.utils.diagnostics import DiagnosticContext
 from app.services.insights import generate_insights_for_workbook
 
@@ -455,7 +457,18 @@ def process_single_file(name: str, data: bytes, materiality_pct: float = 5.0, ma
         except Exception as e:
             diag.error("read_excel_failed", e)
             return {"mode": "error", "error": "Failed to read Excel", "diagnostics": diag.to_dict()}
+        # === Decide path ===
+        # 0) Doors-quotes adapter (your attached workbook layout)
+        try:
+            if is_doors_quotes_workbook(xls):
+                diag.step("path_selected", mode="doors_quotes_adapter")
+                response = adapt_doors_quotes(xls, materiality_pct, materiality_amt_sar)
+                response["diagnostics"] = diag.to_dict()
+                return response
+        except Exception as e:
+            diag.warn("doors_quotes_adapter_failed", error=str(e))
 
+        # existing logic continues below (budget/actual or insights fallback) ...
         sheets: Dict[str, pd.DataFrame] = {}
         for sn in xls.sheet_names:
             try:
