@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 import pandas as pd
 
@@ -30,6 +30,119 @@ def _load_workbook(filename: str, data: bytes):
     except Exception:
         return {}
 
+def _fmt_currency(v: Optional[float]) -> str:
+    try:
+        if v is None:
+            return "—"
+        return f"SAR {float(v):,.0f}"
+    except Exception:
+        return "—"
+
+def _md_table(headers: List[str], rows: List[List[Any]], max_rows: int = 10) -> str:
+    if not rows:
+        return "_No data found._"
+    rows = rows[:max_rows]
+    header = " | ".join(headers)
+    sep = " | ".join(["---"] * len(headers))
+    body = "\n".join(" | ".join(str(c) if c is not None else "—" for c in r) for r in rows)
+    return f"{header}\n{sep}\n{body}"
+
+def _build_report_markdown_for_quote_compare(payload: Dict[str, Any], filename: str) -> str:
+    """Markdown report for doors-quotes style comparison."""
+    vendor_totals = payload.get("vendor_totals", []) or payload.get("totals_per_vendor", [])
+    spreads = payload.get("variance_items", [])
+    insights = (payload.get("insights") or {})
+
+    # Normalize vendor_totals row shape
+    vt_rows = []
+    for r in vendor_totals:
+        vendor = r.get("vendor") or r.get("vendor_name") or r.get("name") or "Vendor"
+        total = r.get("total_amount_sar") or r.get("total_sar") or r.get("total") or r.get("amount_sar")
+        vt_rows.append([str(vendor), _fmt_currency(total)])
+
+    # Normalize spread rows
+    sp_rows = []
+    for r in spreads:
+        item = r.get("item_code") or r.get("description") or r.get("label") or "Item"
+        min_u = r.get("min_unit_price_sar") or r.get("min_unit_sar") or r.get("min_price")
+        max_u = r.get("max_unit_price_sar") or r.get("max_unit_sar") or r.get("max_price")
+        spread = r.get("unit_price_spread_sar") or r.get("spread_sar") or r.get("delta_sar")
+        spread_p = r.get("unit_price_spread_pct") or r.get("spread_pct") or r.get("delta_pct")
+        sp_rows.append([str(item)[:40], _fmt_currency(min_u), _fmt_currency(max_u), _fmt_currency(spread), f"{spread_p:.1f}%" if isinstance(spread_p,(int,float)) else "—"])
+
+    # Summary bullets
+    n_vendors = len(vt_rows)
+    total_spend = None
+    try:
+        totals = []
+        for r in vendor_totals:
+            t = r.get("total_amount_sar") or r.get("total_sar") or r.get("total") or r.get("amount_sar")
+            if t is not None:
+                totals.append(float(t))
+        total_spend = sum(totals) if totals else None
+    except Exception:
+        total_spend = None
+
+    highlights = insights.get("highlights") or []
+    bullets = []
+    if total_spend is not None:
+        bullets.append(f"**Total quoted spend:** {_fmt_currency(total_spend)}")
+    bullets.append(f"**Vendors compared:** {n_vendors or '—'}")
+    if spreads:
+        bullets.append("**Price dispersion detected** across vendors (see table below).")
+    bullets.extend(f"- {h}" for h in highlights[:5])
+
+    md = []
+    md.append(f"### Single-File Summary — {filename}")
+    md.append("")
+    if bullets:
+        md.append("\n".join(f"- {b}" if not b.startswith("- ") else b for b in bullets))
+        md.append("")
+    if vt_rows:
+        md.append("#### Totals by vendor")
+        md.append(_md_table(["Vendor","Total"], vt_rows))
+        md.append("")
+    if sp_rows:
+        md.append("#### Top unit price spreads")
+        md.append(_md_table(["Item","Min Unit","Max Unit","Spread","Spread %"], sp_rows))
+        md.append("")
+    return "\n".join(md).strip()
+
+def _build_report_markdown_for_generic_insights(insights: Dict[str, Any], filename: str) -> str:
+    """Markdown report for generic workbook insights (CSV/XLSX)."""
+    highlights = insights.get("highlights") or []
+    vendor_tbl = insights.get("tables", {}).get("workbook::vendor_totals") if isinstance(insights.get("tables"), dict) else None
+    spread_tbl = insights.get("tables", {}).get("workbook::vendor_spreads") if isinstance(insights.get("tables"), dict) else None
+
+    vt_rows: List[List[Any]] = []
+    if vendor_tbl and isinstance(vendor_tbl, list):
+        for r in vendor_tbl:
+            vt_rows.append([str(r.get("vendor") or r.get("vendor_name") or "Vendor"), _fmt_currency(r.get("total_sar"))])
+
+    sp_rows: List[List[Any]] = []
+    if spread_tbl and isinstance(spread_tbl, list):
+        for r in spread_tbl:
+            sp_rows.append([str(r.get("item") or r.get("label") or "Item")[:40],
+                            _fmt_currency(r.get("min_unit_sar")),
+                            _fmt_currency(r.get("max_unit_sar")),
+                            _fmt_currency(r.get("spread_sar")),
+                            f"{r.get('spread_pct', 0):.1f}%" if isinstance(r.get("spread_pct"), (int,float)) else "—"])
+
+    md = [f"### Single-File Summary — {filename}", ""]
+    if highlights:
+        md.append("#### Highlights")
+        md.append("\n".join(f"- {h}" for h in highlights[:8]))
+        md.append("")
+    if vt_rows:
+        md.append("#### Totals by vendor")
+        md.append(_md_table(["Vendor","Total"], vt_rows))
+        md.append("")
+    if sp_rows:
+        md.append("#### Vendor price spreads")
+        md.append(_md_table(["Item","Min Unit","Max Unit","Spread","Spread %"], sp_rows))
+        md.append("")
+    return "\n".join(md).strip()
+
 
 def process_single_file(
     filename: str,
@@ -48,7 +161,12 @@ def process_single_file(
                 if is_doors_quotes_workbook(wb, file_name=filename):
                     diag.step("doors_quotes_detected")
                     payload = adapt_doors_quotes(wb, materiality_pct, materiality_amt_sar)
+                    # Attach reader-friendly analysis & report
+                    payload["report_markdown"] = _build_report_markdown_for_quote_compare(payload, filename)
+                    payload.setdefault("insights", {})
+                    payload["insights"].setdefault("highlights", [])
                     payload["diagnostics"] = diag.to_dict()
+                    diag.step("report_built", length=len(payload["report_markdown"]))
                     return payload
             except Exception as e:  # pragma: no cover - defensive
                 diag.warn("doors_quotes_detection_failed", error=str(e))
@@ -56,11 +174,14 @@ def process_single_file(
             try:
                 sheets = {sn: wb.parse(sn) for sn in wb.sheet_names}
                 insights = generate_insights_for_workbook(sheets)
-                return {
+                result = {
                     "mode": "insights",
                     "insights": insights,
+                    "report_markdown": _build_report_markdown_for_generic_insights(insights, filename),
                     "diagnostics": diag.to_dict(),
                 }
+                diag.step("report_built", length=len(result.get("report_markdown") or ""))
+                return result
             except Exception as e:  # pragma: no cover - defensive
                 diag.error("insights_failed", e)
                 return {
@@ -73,11 +194,14 @@ def process_single_file(
             df = wb["__csv__"]
             diag.step("read_csv_success", rows=int(df.shape[0]), cols=int(df.shape[1]))
             insights = generate_insights_for_workbook({"Sheet1": df})
-            return {
+            result = {
                 "mode": "insights",
                 "insights": insights,
+                "report_markdown": _build_report_markdown_for_generic_insights(insights, filename),
                 "diagnostics": diag.to_dict(),
             }
+            diag.step("report_built", length=len(result.get("report_markdown") or ""))
+            return result
 
         diag.warn("unsupported_or_empty", filename=filename)
         return {
