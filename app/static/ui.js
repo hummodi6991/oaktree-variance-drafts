@@ -22,6 +22,13 @@ async function generateFromSingleFile() {
     setStatus && setStatus('Done');
     return;
   }
+  // NEW: Insights fallback (single-file track with no B/A and no recognizable line items)
+  if (data && (data.kind === "insights" || data.mode === "insights")) {
+    renderInsights(data.insights || {});
+    if (data.message) renderNotice(data.message);
+    setStatus && setStatus('Done');
+    return;
+  }
 
   const variance = (data.variance_items || []);
   const hasVariance = Array.isArray(variance) && variance.length > 0;
@@ -35,11 +42,41 @@ async function generateFromSingleFile() {
     if (data.message) renderNotice(data.message);
     renderProcurementSummary({ items: procurement, insights: data.insights || {} });
   } else {
-    renderSingleFileError('No budget/actuals found and no recognizable procurement lines. Please upload budget/actuals CSV/Excel for variance, or a quote/BOQ for procurement.');
+    renderSingleFileError('No budget/actuals found. Showing file-level insights instead.');
   }
   if (data && data.diagnostics) {
     renderDiagnostics(data.diagnostics);
   }
+}
+
+// NEW: render workbook insights (cards + simple tables)
+function renderInsights(ins) {
+  const root = document.getElementById('results') || document.body;
+  const box = document.getElementById('result_box') || root;
+  box.innerHTML = '';
+  const h = document.createElement('div');
+  h.className = 'card';
+  const highlights = (ins && ins.highlights && ins.highlights.length)
+    ? ('<ul>' + ins.highlights.map(x => `<li>${escapeHtml(x)}</li>`).join('') + '</ul>')
+    : '<p class="muted">No highlights available.</p>';
+  const cards = (ins && ins.cards)
+    ? ins.cards.map(c => `<div class="kv"><b>${escapeHtml(c.title || c.sheet || 'Metric')}</b>: ${escapeHtml(String(c.value_sar ?? c.value ?? '—'))}</div>`).join('')
+    : '';
+  h.innerHTML = `<div class="card-title">Workbook Insights</div>${highlights}${cards}`;
+  box.appendChild(h);
+
+  // Simple table renderers (top vendors, top items, spreads)
+  function appendTable(title, rows, cols) {
+    if (!rows || !rows.length) return;
+    const div = document.createElement('div');
+    div.className = 'card';
+    const th = cols.map(c => `<th>${escapeHtml(c)}</th>`).join('');
+    const trs = rows.slice(0, 20).map(r => `<tr>${cols.map(c => `<td>${escapeHtml(String(r[c] ?? ''))}</td>`).join('')}</tr>`).join('');
+    div.innerHTML = `<div class="card-title">${escapeHtml(title)}</div><table class="simple"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+    box.appendChild(div);
+  }
+  appendTable('Top vendors by spend', (ins.tables && ins.tables['workbook::vendor_totals']) || [], ['vendor','total_sar']);
+  appendTable('Largest bid spreads', (ins.tables && ins.tables['workbook::vendor_spreads']) || [], ['description','min_vendor','min_unit_sar','max_vendor','max_unit_sar','spread_pct']);
 }
 
 function renderVarianceDraftCards(items) {
