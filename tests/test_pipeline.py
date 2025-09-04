@@ -62,9 +62,7 @@ def test_generate_drafts_change_orders_only():
         category_map=category_map,
         config=ConfigModel(materiality_pct=0, materiality_amount_sar=0),
     )
-    drafts = generate_drafts(req)
-    assert len(drafts) == 1
-    v = drafts[0].variance
-    assert v.actual_sar == 150000.0
-    assert v.budget_sar == 0.0
-    assert v.category == "Materials"
+    summary = generate_drafts(req)
+    assert summary["kind"] == "summary"
+    assert summary["insights"]["total_change_orders"] == 1
+    assert summary["insights"]["total_amount_sar"] == 150000.0

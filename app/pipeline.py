@@ -1,5 +1,5 @@
 
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, Any
 from collections import defaultdict
 from datetime import datetime
 from .schemas import (
@@ -64,6 +64,8 @@ def attach_drivers_and_vendors(items: List[VarianceItem], change_orders: List[Ch
         start, end = ym_to_range(v.period)
         drivers, evidence, vend_set = [], [], set()
         for co in co_by_project.get(v.project_id, []):
+            if not co.date:
+                continue
             try:
                 co_date = datetime.strptime(co.date, "%Y-%m-%d")
             except Exception:
@@ -83,42 +85,50 @@ def attach_drivers_and_vendors(items: List[VarianceItem], change_orders: List[Ch
         v.vendors = sorted(vend_set)
 
 
-def change_orders_to_variances(change_orders: List[ChangeOrderRow], cat_lu: Dict[str, str]) -> List[VarianceItem]:
-    """Fallback variance items derived directly from change orders.
+def _summarize_change_orders(change_orders: List[ChangeOrderRow], cat_lu: Dict[str, str]) -> Dict[str, Any]:
+    """Build a lightweight summary/insights object from change-order style rows."""
+    from collections import defaultdict
+    total = 0.0
+    count = 0
+    by_cat: Dict[str, float] = defaultdict(float)
+    top: List[Dict[str, Any]] = []
 
-    When structured budget/actual rows are unavailable but change orders are
-    provided (e.g. free-form upload), treat each change order amount as a
-    variance against a zero budget. This enables downstream draft generation
-    rather than returning "no variance items found".
-    """
-    out: List[VarianceItem] = []
-    for co in change_orders:
-        if co.amount_sar is None:
+    for co in change_orders or []:
+        try:
+            amt = float(co.amount_sar) if co.amount_sar is not None else None
+        except Exception:
+            amt = None
+        if amt is None:
             continue
-        project_id = co.project_id or "Unknown"
-        period = (co.date or "1970-01-01")[:7]
-        category = co.category or cat_lu.get(co.linked_cost_code or "", "Uncategorized")
-        amount = float(co.amount_sar)
-        driver = co.description or (f"Change Order {co.co_id}" if co.co_id else "")
-        drivers = [driver] if driver else []
-        vn = getattr(co, "vendor_name", None)
-        vendors = [vn] if vn else []
-        evidence = [co.file_link] if co.file_link else []
-        out.append(
-            VarianceItem(
-                project_id=project_id,
-                period=period,
-                category=category,
-                budget_sar=0.0,
-                actual_sar=amount,
-                variance_sar=amount,
-                variance_pct=100.0 if amount else 0.0,
-                drivers=drivers,
-                vendors=vendors,
-                evidence_links=evidence,
-            )
-        )
-    return out
+        count += 1
+        total += amt
+        cat = co.category or cat_lu.get(co.linked_cost_code or "", "Uncategorized")
+        by_cat[cat] += amt
+        top.append({
+            "project_id": co.project_id or "Unknown",
+            "date": co.date,
+            "category": cat,
+            "co_id": getattr(co, "co_id", None),
+            "description": co.description,
+            "amount_sar": amt,
+            "file_link": co.file_link,
+            "vendor_name": getattr(co, "vendor_name", None),
+        })
+
+    top = sorted(top, key=lambda r: r.get("amount_sar") or 0.0, reverse=True)[:20]
+    return {
+        "kind": "summary",
+        "message": "No budget/actuals detected — showing change-order summary.",
+        "insights": {
+            "total_change_orders": count,
+            "total_amount_sar": round(total, 2),
+            "totals_by_category": [
+                {"category": k, "total_amount_sar": round(v, 2)}
+                for k, v in sorted(by_cat.items(), key=lambda x: -x[1])
+            ],
+            "top_change_orders_by_amount": top,
+        },
+    }
 
 def filter_materiality(items: List[VarianceItem], cfg: ConfigModel) -> List[VarianceItem]:
     return [v for v in items if abs(v.variance_pct) >= cfg.materiality_pct or abs(v.variance_sar) >= cfg.materiality_amount_sar]
@@ -131,7 +141,7 @@ def _noop_progress(pct: int, msg: str = "") -> None:
 def generate_drafts(
     req: DraftRequest,
     progress_cb: Callable[[int, str], None] = _noop_progress,
-) -> List[DraftResponse]:
+) -> Any:
     """High-level helper to build drafts from CSV-derived models."""
     progress_cb(10, "Loading & validating input")
     cat_lu = build_category_lookup(req.category_map)
@@ -140,9 +150,18 @@ def generate_drafts(
     items = group_variances(req.budget_actuals, cat_lu)
     if items:
         attach_drivers_and_vendors(items, req.change_orders, req.vendor_map, cat_lu)
-    elif req.change_orders:
-        # No structured budget/actual rows; derive variances directly from change orders
-        items = change_orders_to_variances(req.change_orders, cat_lu)
+    else:
+        # NEW behavior: if we have no budget/actual pairs, do NOT fabricate
+        # variance drafts from change orders. Return a summary+insights instead.
+        if req.change_orders:
+            progress_cb(40, "Summarizing change orders")
+            return _summarize_change_orders(req.change_orders, cat_lu)
+        # Nothing useful to summarize
+        return {
+            "kind": "summary",
+            "message": "No budget/actuals or change-order rows detected.",
+            "insights": {},
+        }
 
     progress_cb(55, "Preparing EN prompt")
     material = filter_materiality(items, req.config)
