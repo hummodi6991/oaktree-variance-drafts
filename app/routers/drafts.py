@@ -1,6 +1,5 @@
 from fastapi import APIRouter, UploadFile, File
 import asyncio
-from typing import Dict, Any, List
 
 from app.parsers.procurement_pdf import parse_procurement_pdf
 from app.services.singlefile import process_single_file
@@ -62,8 +61,8 @@ async def from_file(file: UploadFile = File(...)):
         if processed.get("mode") == "quote_compare":
             return {
                 "kind": "quote_compare",
-                # 'variance_items' here are "spreads" flagged by materiality rules
-                "spreads": processed.get("variance_items") or [],
+                # expose under the stable name the UI expects
+                "variance_items": processed.get("variance_items") or [],
                 "vendor_totals": processed.get("vendor_totals") or [],
                 "insights": processed.get("insights", {}),
                 "message": processed.get("message"),
