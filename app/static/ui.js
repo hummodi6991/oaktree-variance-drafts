@@ -17,13 +17,9 @@ async function generateFromSingleFile() {
     if (data.diagnostics) { renderDiagnostics(data.diagnostics); }
     return;
   }
-
-  // NEW: handle quote-compare payloads from /drafts/from-file
-  const isQuoteCompare = (data && (data.kind === 'quote_compare' || data.mode === 'quote_compare'));
-  if (isQuoteCompare) {
-    if (data.message) renderNotice(data.message);
+  if (data && (data.kind === 'quote_compare' || data.mode === 'quote_compare')) {
     renderQuoteCompare(data);
-    if (data.diagnostics) { renderDiagnostics(data.diagnostics); }
+    setStatus && setStatus('Done');
     return;
   }
 
@@ -83,77 +79,53 @@ function renderProcurementSummary({ items, insights }) {
 }
 
 // --- NEW: quote-compare rendering ---
-function renderQuoteCompare(payload) {
-  const box = document.getElementById('result_box');
-  box.innerHTML = '';
 
-  const spreads = Array.isArray(payload.spreads) ? payload.spreads : (payload.variance_items || []);
-  const totals  = Array.isArray(payload.vendor_totals) ? payload.vendor_totals : [];
+function renderQuoteCompare(data) {
+  const root = document.getElementById('results') || document.body;
+  root.innerHTML = '';
 
-  if (spreads && spreads.length) {
+  // Spreads / variance items
+  if (Array.isArray(data.variance_items) && data.variance_items.length) {
     const table = document.createElement('table');
-    table.className = 'table';
-    table.style.width = '100%';
-    table.innerHTML = `
-      <thead>
-        <tr>
-          <th>Item</th>
-          <th>Best Vendor</th>
-          <th>Best Unit (SAR)</th>
-          <th>Worst Vendor</th>
-          <th>Worst Unit (SAR)</th>
-          <th>Unit Δ (SAR)</th>
-          <th>Spread %</th>
-          <th>Total Δ (SAR)</th>
-        </tr>
-      </thead>
-      <tbody></tbody>`;
-    const tbody = table.querySelector('tbody');
-    spreads.forEach(s => {
+    const head = document.createElement('thead');
+    head.innerHTML = '<tr><th>Item</th><th>Vendor</th><th>Quoted</th><th>Expected</th><th>Variance</th></tr>';
+    table.appendChild(head);
+    const body = document.createElement('tbody');
+    data.variance_items.forEach(v => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${escapeHtml(s.item_code || s.description || '—')}</td>
-        <td>${escapeHtml(s.min_vendor || '—')}</td>
-        <td>${s.min_unit_sar ?? '—'}</td>
-        <td>${escapeHtml(s.max_vendor || '—')}</td>
-        <td>${s.max_unit_sar ?? '—'}</td>
-        <td>${s.unit_spread_sar ?? '—'}</td>
-        <td>${s.spread_pct != null ? s.spread_pct + '%' : '—'}</td>
-        <td>${s.total_spread_sar ?? '—'}</td>`;
-      tbody.appendChild(tr);
+        <td>${v.item ?? ''}</td>
+        <td>${v.vendor ?? ''}</td>
+        <td>${v.quoted ?? ''}</td>
+        <td>${v.expected ?? ''}</td>
+        <td>${v.variance ?? ''}</td>
+      `;
+      body.appendChild(tr);
     });
-    box.appendChild(table);
-  } else if (totals && totals.length) {
-    const table = document.createElement('table');
-    table.className = 'table';
-    table.style.width = '100%';
-    table.innerHTML = `
-      <thead>
-        <tr><th>Vendor</th><th>Total Amount (SAR)</th></tr>
-      </thead>
-      <tbody></tbody>`;
-    const tbody = table.querySelector('tbody');
-    totals.forEach(r => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHtml(r.vendor_name || '—')}</td><td>${r.total_amount_sar ?? '—'}</td>`;
-      tbody.appendChild(tr);
-    });
-    box.appendChild(table);
-  } else {
-    box.innerText = 'No quote spreads or vendor totals found.';
+    table.appendChild(body);
+    root.appendChild(table);
   }
 
-  // Optional: show highlights (if provided by backend)
-  if (payload.insights && Array.isArray(payload.insights.highlights) && payload.insights.highlights.length) {
-    const h = document.createElement('div');
-    h.style.marginTop = '12px';
-    const title = document.createElement('h3'); title.textContent = 'Highlights'; h.appendChild(title);
-    const ul = document.createElement('ul');
-    payload.insights.highlights.forEach(t => { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); });
-    h.appendChild(ul);
-    box.appendChild(h);
+  // Vendor totals, if present
+  if (data.vendor_totals && Object.keys(data.vendor_totals).length) {
+    const h = document.createElement('h3');
+    h.textContent = 'Vendor Totals';
+    root.appendChild(h);
+    const table2 = document.createElement('table');
+    const head2 = document.createElement('thead');
+    head2.innerHTML = '<tr><th>Vendor</th><th>Total</th></tr>';
+    table2.appendChild(head2);
+    const body2 = document.createElement('tbody');
+    Object.entries(data.vendor_totals).forEach(([vendor, total]) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${vendor}</td><td>${total}</td>`;
+      body2.appendChild(tr);
+    });
+    table2.appendChild(body2);
+    root.appendChild(table2);
   }
 }
+
 
 function renderSingleFileError(msg) {
   const box = document.getElementById('result_box');
