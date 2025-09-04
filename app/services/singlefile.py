@@ -24,10 +24,10 @@ PERIOD_KEYS   = {"period","month","month_year","posting_period","date"}
 CODE_KEYS     = {"cost_code","gl_code","costcode","account_code","code","item no","item_no","item #","reference","ref"}
 CAT_KEYS      = {"category","reporting_category","group","trade"}
 DESC_KEYS     = {"description","desc","item","line_item","scope","description of works","item description","work description","specification"}
-QTY_KEYS      = {"qty","quantity","qtty","qty.","no of doors","no of units","no.","q"}
-UPRICE_KEYS   = {"unit_price","unit price","unit rate","rate","u.rate","unit_price_sar","price per unit","price/unit","u rate","unit rate (sar)"}
-AMOUNT_KEYS   = {"amount","amount_sar","line_total","total","value","total_sar","total price","line amount","extended amount","net amount","subtotal","grand total","total price (sar)"}
-VENDOR_KEYS   = {"vendor","vendor_name","supplier","supplier_name","company","vendor/supplier"}
+QTY_KEYS      = {"qty","quantity","qtty","qty.","no of doors","no of units","no.","q","qty (nos)","nos","units","quantity (nos)"}
+UPRICE_KEYS   = {"unit_price","unit price","unit rate","rate","u.rate","unit_price_sar","price per unit","price/unit","u rate","unit rate (sar)","unit price (sar)"}
+AMOUNT_KEYS   = {"amount","amount_sar","line_total","total","value","total_sar","total price","line amount","extended amount","net amount","subtotal","grand total","total price (sar)","total (sar)","line total (sar)"}
+VENDOR_KEYS   = {"vendor","vendor_name","supplier","supplier_name","company","vendor/supplier","quoted by","bidder","vendor name"}
 
 AMT_RE = r'(?:SAR|SR|\$)?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)'
 DATE_RE = r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{2}[/-]\d{2}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{4})'
@@ -76,7 +76,7 @@ def _coerce_header_row(df: pd.DataFrame) -> pd.DataFrame:
     """
     if df.empty:
         return df
-    cues = ("description","item","qty","quantity","unit","unit price","rate","total","amount","price")
+    cues = ("description","item","qty","quantity","unit","unit price","rate","total","amount","price","vendor","supplier")
     best_i, best_score = -1, 0
     n = min(10, len(df))
     for i in range(n):
@@ -460,18 +460,11 @@ def process_single_file(name: str, data: bytes, materiality_pct: float = 5.0, ma
     # If we have recognizably vendorized items, run the quote-spread comparator
     if not items.empty and not _has_budget_actual(items):
         spreads = _quote_spread_variances(items, mat_pct=materiality_pct, mat_amt=materiality_amt_sar)
-        if spreads:
-            return {
-                "mode": "quote_compare",
-                "variance_items": spreads,
-                "vendor_totals": _vendor_totals(items),
-            }
-        # No flagged rows, but still provide a summary so the UI shows something
         return {
             "mode": "quote_compare",
-            "variance_items": [],
+            "variance_items": spreads,  # may be empty
             "vendor_totals": _vendor_totals(items),
-            "message": "No items breached materiality; showing vendor totals only."
+            "message": None if spreads else "No items breached materiality; showing vendor totals only.",
         }
     # Otherwise, fall back to prior summary behavior using generic row extraction
     df = next(iter(sheets.values()), _read_df(name, data))
