@@ -460,7 +460,7 @@ def process_single_file(name: str, data: bytes, materiality_pct: float = 5.0, ma
         # === Decide path ===
         # 0) Doors-quotes adapter (your attached workbook layout)
         try:
-            if is_doors_quotes_workbook(xls):
+            if is_doors_quotes_workbook(xls, file_name=name):
                 diag.step("path_selected", mode="doors_quotes_adapter")
                 response = adapt_doors_quotes(xls, materiality_pct, materiality_amt_sar)
                 response["diagnostics"] = diag.to_dict()
