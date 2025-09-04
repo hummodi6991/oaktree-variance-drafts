@@ -59,6 +59,15 @@ def _read_df(name: str, data: bytes) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+def _read_excel_sheets(data: bytes) -> Dict[str, pd.DataFrame]:
+    """Read all sheets (if Excel), otherwise return empty dict."""
+    try:
+        bio = io.BytesIO(data)
+        xls = pd.ExcelFile(bio)
+        return {sn: xls.parse(sn) for sn in xls.sheet_names}
+    except Exception:
+        return {}
+
 def _coerce_header_row(df: pd.DataFrame) -> pd.DataFrame:
     """
     Many quotes put headers on row 2/3 with a title block above.
@@ -258,6 +267,120 @@ def _rows_from_table(df: pd.DataFrame) -> List[Dict[str,Any]]:
         out.append(item)
     return out
 
+# ----------------------------
+# Quote-comparison fallback
+# ----------------------------
+def _looks_like_line_items(df: pd.DataFrame) -> bool:
+    """Heuristic check whether a sheet has vendorized line-item quotes."""
+    m = _norm_cols(df)
+    cols = set(m.keys())
+
+    def has(keys: set[str]) -> bool:
+        return any(any(k in c for k in keys) for c in cols)
+
+    return (
+        has(DESC_KEYS | {"description"})
+        and has(QTY_KEYS | {"qty"})
+        and has(UPRICE_KEYS | {"unit price", "unit price sar", "unit rate"})
+        and has(VENDOR_KEYS | {"vendor"})
+    )
+
+
+def _normalize_line_items(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a clean frame with: description, qty, unit_price_sar, amount_sar, vendor_name."""
+    cols = _norm_cols(df)
+
+    def pick(keys: set[str]) -> Optional[str]:
+        for norm, orig in cols.items():
+            if norm in keys:
+                return orig
+        for norm, orig in cols.items():
+            if any(k in norm for k in keys):
+                return orig
+        return None
+
+    c_desc = pick(DESC_KEYS | {"description"})
+    c_qty = pick(QTY_KEYS | {"qty"})
+    c_upr = pick(UPRICE_KEYS | {"unit price", "unit price sar", "unit rate", "unit rate sar"})
+    c_amt = pick(AMOUNT_KEYS | {"amount_sar", "line total (sar)", "amount sar", "total sar"})
+    c_vendor = pick(VENDOR_KEYS | {"vendor_name", "supplier"})
+
+    out = pd.DataFrame(
+        {
+            "description": df[c_desc] if c_desc in df else None,
+            "qty": df[c_qty] if c_qty in df else None,
+            "unit_price_sar": df[c_upr] if c_upr in df else None,
+            "amount_sar": df[c_amt] if c_amt in df else None,
+            "vendor_name": df[c_vendor] if c_vendor in df else None,
+        }
+    )
+
+    # coerce numerics
+    for k in ("qty", "unit_price_sar", "amount_sar"):
+        if k in out:
+            out[k] = pd.to_numeric(out[k], errors="coerce")
+
+    # derive amount if missing but qty & unit present
+    need_amt = out["amount_sar"].isna() & out["qty"].notna() & out["unit_price_sar"].notna()
+    out.loc[need_amt, "amount_sar"] = (
+        out.loc[need_amt, "qty"] * out.loc[need_amt, "unit_price_sar"]
+    ).round(2)
+
+    # drop empties
+    out = out.dropna(subset=["description", "vendor_name", "unit_price_sar"]).reset_index(
+        drop=True
+    )
+    return out
+
+def _quote_spread_variances(df_items: pd.DataFrame, mat_pct: float, mat_amt: float) -> List[Dict[str, Any]]:
+    """
+    Build 'variance-like' rows from vendor quote spreads grouped by description.
+    A row is flagged if either percent spread >= mat_pct OR total spread (qty*delta) >= mat_amt.
+    """
+    variances: List[Dict[str,Any]] = []
+    if df_items.empty: 
+        return variances
+    # total qty for each description across vendors (fallback: max per vendor if wildly different)
+    g = df_items.groupby("description", dropna=False)
+    for desc, grp in g:
+        try:
+            idx_min = grp["unit_price_sar"].idxmin()
+            idx_max = grp["unit_price_sar"].idxmax()
+        except ValueError:
+            continue
+        rmin = grp.loc[idx_min]
+        rmax = grp.loc[idx_max]
+        qty = int(np.nan_to_num(grp["qty"]).sum()) or int(np.nan_to_num(grp["qty"]).max(initial=0))
+        min_u = float(rmin["unit_price_sar"])
+        max_u = float(rmax["unit_price_sar"])
+        if not (np.isfinite(min_u) and np.isfinite(max_u) and min_u>0):
+            continue
+        pct  = (max_u/min_u - 1.0) * 100.0
+        d_u  = max_u - min_u
+        d_tot = d_u * max(qty, 1)
+        flagged = (pct >= float(mat_pct)) or (d_tot >= float(mat_amt))
+        variances.append({
+            "type": "quote_spread",
+            "description": str(desc),
+            "qty_total": qty,
+            "min_vendor": str(rmin.get("vendor_name")),
+            "min_unit_sar": round(min_u,2),
+            "max_vendor": str(rmax.get("vendor_name")),
+            "max_unit_sar": round(max_u,2),
+            "unit_spread_sar": round(d_u,2),
+            "spread_pct": round(pct,2),
+            "total_spread_sar": round(d_tot,2),
+            "flagged": bool(flagged),
+        })
+    # Only keep flagged rows so the UI doesn't say "none".
+    return [v for v in variances if v["flagged"]]
+
+def _vendor_totals(df_items: pd.DataFrame) -> List[Dict[str,Any]]:
+    if df_items.empty or "amount_sar" not in df_items:
+        return []
+    tots = df_items.groupby("vendor_name", dropna=False)["amount_sar"].sum().sort_values(ascending=False)
+    return [{"vendor_name": k, "amount_sar": float(v)} for k, v in tots.items()]
+
 def _rows_from_text_items(text: str) -> Tuple[List[Dict[str,Any]], Optional[str]]:
     if not text.strip():
         return [], None
@@ -341,37 +464,51 @@ def build_variance_insights(rows: List[Dict[str,Any]]) -> Dict[str,Any]:
     top_dec = [x for x in ranked if x["variance_sar"]<0][:5]
     return {"total_budget":tb,"total_actual":ta,"total_variance":tv,"top_increases":top_inc,"top_decreases":top_dec}
 
-# ----------------------------
-# Orchestrator
-# ----------------------------
-def process_single_file(name: str, data: bytes) -> Dict[str,Any]:
+def process_single_file(name: str, data: bytes, materiality_pct: float = 5.0, materiality_amt_sar: float = 100000.0) -> Dict[str, Any]:
     """
-    Returns:
-      {"mode":"variance","variances":[...], "insights": {...}}
-      OR
-      {"mode":"summary","items":[...]}  # procurement/general summary
+    Existing entrypoint, now with quote-comparison fallback.
+    - If we can’t detect budget/actual pairs, try to compute vendor quote spreads.
+    - Returns a dict with keys:
+        mode: "quote_compare" | "summary" | ...
+        items / variance_items: list of rows
+        vendor_totals: optional per-vendor totals
     """
-    # 1) Try table route
-    df = _read_df(name, data)
-    if not df.empty and _has_budget_actual(df):
-        variances = extract_budget_variances(df)
-        return {"mode":"variance", "variances": variances, "insights": build_variance_insights(variances)}
+    # If Excel, scan sheets for one that looks like line items.
+    sheets = _read_excel_sheets(data)
+    items = pd.DataFrame()
+    for sn, df_sheet in sheets.items():
+        df0 = _coerce_header_row(df_sheet)
+        norm_sn = re.sub(r"\s+", "_", sn.strip().lower())
+        if norm_sn in {"line_items", "lineitems"} or _looks_like_line_items(df0):
+            items = _normalize_line_items(df0)
+            if not items.empty:
+                break
+    if items.empty:
+        # fall back to first sheet/table we can coerce
+        df0 = next(iter(sheets.values()), _read_df(name, data))
+        df0 = _coerce_header_row(df0)
+        items = _normalize_line_items(df0) if _looks_like_line_items(df0) else pd.DataFrame()
 
-    # 2) Try text route for budget/actual
-    text = _read_text(name, data)
-    pairs = extract_budget_actual_from_text(text)
-    if pairs:
-        return {"mode":"variance", "variances": pairs, "insights": build_variance_insights(pairs)}
-
-    # 3) No budget/actual → procurement/general summary
-    items: List[Dict[str,Any]] = []
-    if not df.empty:
-        items = _rows_from_table(df)
-    if not items and text:
-        items, _ = _rows_from_text_items(text)
-
-    filtered = [it for it in items if any([it.get("description"), it.get("amount_sar"), it.get("unit_price_sar"), it.get("qty")])]
-    return {"mode":"summary", "items": filtered}
+    # If we have recognizably vendorized items, run the quote-spread comparator
+    if not items.empty and not _has_budget_actual(items):
+        spreads = _quote_spread_variances(items, mat_pct=materiality_pct, mat_amt=materiality_amt_sar)
+        if spreads:
+            return {
+                "mode": "quote_compare",
+                "variance_items": spreads,
+                "vendor_totals": _vendor_totals(items),
+            }
+        # No flagged rows, but still provide a summary so the UI shows something
+        return {
+            "mode": "quote_compare",
+            "variance_items": [],
+            "vendor_totals": _vendor_totals(items),
+            "message": "No items breached materiality; showing vendor totals only."
+        }
+    # Otherwise, fall back to prior summary behavior using generic row extraction
+    df = next(iter(sheets.values()), _read_df(name, data))
+    rows = _rows_from_table(df)
+    return {"mode": "summary", "items": rows}
 
 def draft_bilingual_procurement_card(it: Dict[str,Any], file_label: str) -> Dict[str,str]:
     parts_en = []
