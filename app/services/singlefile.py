@@ -21,13 +21,13 @@ BUDGET_KEYS   = {"budget","planned","plan","budget_sar","planned_sar","budget_am
 ACTUAL_KEYS   = {"actual","actuals","spent","actual_sar","actual_amount","spend_sar"}
 PROJECT_KEYS  = {"project","project_id","project name","projectname","proj_id"}
 PERIOD_KEYS   = {"period","month","month_year","posting_period","date"}
-CODE_KEYS     = {"cost_code","gl_code","costcode","account_code","code"}
-CAT_KEYS      = {"category","reporting_category","group"}
-DESC_KEYS     = {"description","desc","item","line_item","scope"}
-QTY_KEYS      = {"qty","quantity","qtty"}
-UPRICE_KEYS   = {"unit_price","unit price","rate","u.rate","unit_price_sar"}
-AMOUNT_KEYS   = {"amount","amount_sar","line_total","total","value","total_sar"}
-VENDOR_KEYS   = {"vendor","vendor_name","supplier","supplier_name","company"}
+CODE_KEYS     = {"cost_code","gl_code","costcode","account_code","code","item no","item_no","item #","reference","ref"}
+CAT_KEYS      = {"category","reporting_category","group","trade"}
+DESC_KEYS     = {"description","desc","item","line_item","scope","description of works","item description","work description","specification"}
+QTY_KEYS      = {"qty","quantity","qtty","qty.","no of doors","no of units","no.","q"}
+UPRICE_KEYS   = {"unit_price","unit price","unit rate","unit rate sar","rate","u.rate","unit_price_sar","price per unit","price/unit","u rate"}
+AMOUNT_KEYS   = {"amount","amount_sar","line_total","total","value","total_sar","total price","line amount","extended amount","net amount","subtotal","grand total"}
+VENDOR_KEYS   = {"vendor","vendor_name","supplier","supplier_name","company","vendor/supplier"}
 
 AMT_RE = r'(?:SAR|SR|\$)?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)'
 DATE_RE = r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{2}[/-]\d{2}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{4})'
@@ -59,6 +59,31 @@ def _read_df(name: str, data: bytes) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+def _coerce_header_row(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Many quotes put headers on row 2/3 with a title block above.
+    Find the first row that *looks* like a header (>=2 header-like cells) and
+    promote it to header.
+    """
+    if df.empty:
+        return df
+    cues = ("description","item","qty","quantity","unit","unit price","rate","total","amount","price")
+    best_i, best_score = -1, 0
+    n = min(10, len(df))
+    for i in range(n):
+        row = [str(x).lower() for x in list(df.iloc[i].values)]
+        score = sum(any(c in cell for c in cues) for cell in row)
+        if score >= 2 and score > best_score:
+            best_i, best_score = i, score
+    if best_i >= 0:
+        new_cols = [str(x).strip() for x in list(df.iloc[best_i].values)]
+        df2 = df.iloc[best_i+1:].reset_index(drop=True).copy()
+        # If columns are all empty/Unnamed, bail.
+        if any(new_cols) and not all(str(c).startswith("Unnamed") for c in new_cols):
+            df2.columns = new_cols
+            return df2
+    return df
+
 def _read_text(name: str, data: bytes) -> str:
     low = name.lower()
     if low.endswith(".pdf") and pdfplumber:
@@ -81,6 +106,30 @@ def _read_text(name: str, data: bytes) -> str:
         return data.decode(enc, errors="ignore")
     except Exception:
         return ""
+
+def _guess_vendor_from_preamble(df: pd.DataFrame) -> Optional[str]:
+    """
+    Look for a cell like 'Vendor: XYZ' / 'Supplier: XYZ' near the top of the sheet.
+    """
+    try:
+        peek = df.head(8).astype(str).fillna("")
+    except Exception:
+        return None
+    for row in peek.values.tolist():
+        cells = [str(c).strip() for c in row]
+        for i, cell in enumerate(cells):
+            if re.fullmatch(r'(vendor|supplier)\s*[:\-]?', cell, re.I):
+                for j in range(i+1, len(cells)):
+                    cand = cells[j].strip()
+                    if cand and cand.lower() != 'nan':
+                        return cand[:120]
+        txt = " ".join(cells)
+        m = re.search(r'(vendor|supplier)\s*[:\-]\s*([A-Za-z0-9&()., \-_/]+)', txt, re.I)
+        if m:
+            candidate = m.group(2).strip()
+            if candidate.lower() != 'nan':
+                return candidate[:120]
+    return None
 
 # ----------------------------
 # Budget/Actual detection
@@ -164,12 +213,16 @@ def extract_budget_actual_from_text(text: str) -> List[Dict[str,Any]]:
 # Procurement-like extraction (from table or text)
 # ----------------------------
 def _rows_from_table(df: pd.DataFrame) -> List[Dict[str,Any]]:
+    # Look for vendor before trimming preamble rows
+    sheet_vendor = _guess_vendor_from_preamble(df)
+    # Clean up possible title/preamble rows and promote the true header
+    df = _coerce_header_row(df)
     cols = _norm_cols(df)
     get = lambda sset: next((cols[k] for k in sset if k in cols), None)
     c_desc  = get(DESC_KEYS)
     c_qty   = get(QTY_KEYS)
-    c_upr   = get(UPRICE_KEYS)
-    c_amt   = get(AMOUNT_KEYS)
+    c_upr   = get(UPRICE_KEYS) or next((cols[k] for k in cols if ("unit" in k and "price" in k)), None)
+    c_amt   = get(AMOUNT_KEYS) or next((cols[k] for k in cols if ("total" in k and "vat" not in k)), None)
     c_code  = get(CODE_KEYS)
     c_vend  = get(VENDOR_KEYS)
     out: List[Dict[str,Any]] = []
@@ -180,7 +233,7 @@ def _rows_from_table(df: pd.DataFrame) -> List[Dict[str,Any]]:
             "qty": None,
             "unit_price_sar": None,
             "amount_sar": None,
-            "vendor": str(r[c_vend]).strip() if c_vend and pd.notna(r[c_vend]) else None,
+            "vendor": (str(r[c_vend]).strip() if c_vend and pd.notna(r[c_vend]) else sheet_vendor),
             "doc_date": None,
         }
         if c_qty and pd.notna(r[c_qty]):
@@ -192,6 +245,14 @@ def _rows_from_table(df: pd.DataFrame) -> List[Dict[str,Any]]:
         if c_amt and pd.notna(r[c_amt]):
             try: item["amount_sar"] = float(str(r[c_amt]).replace(",",""))
             except Exception: pass
+        # If no explicit total but qty & unit price exist, compute a safe line amount
+        if item["amount_sar"] is None and (item["qty"] is not None) and (item["unit_price_sar"] is not None):
+            item["amount_sar"] = round(item["qty"] * item["unit_price_sar"], 2)
+        if item["unit_price_sar"] is None and (item["amount_sar"] is not None) and (item.get("qty") not in (None,0)):
+            try:
+                item["unit_price_sar"] = round(item["amount_sar"] / item["qty"], 2)
+            except Exception:
+                pass
         if not any([item["description"], item["amount_sar"], item["unit_price_sar"], item["qty"]]):
             continue
         out.append(item)
