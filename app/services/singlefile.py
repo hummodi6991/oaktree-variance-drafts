@@ -25,8 +25,8 @@ CODE_KEYS     = {"cost_code","gl_code","costcode","account_code","code","item no
 CAT_KEYS      = {"category","reporting_category","group","trade"}
 DESC_KEYS     = {"description","desc","item","line_item","scope","description of works","item description","work description","specification"}
 QTY_KEYS      = {"qty","quantity","qtty","qty.","no of doors","no of units","no.","q"}
-UPRICE_KEYS   = {"unit_price","unit price","unit rate","unit rate sar","rate","u.rate","unit_price_sar","price per unit","price/unit","u rate"}
-AMOUNT_KEYS   = {"amount","amount_sar","line_total","total","value","total_sar","total price","line amount","extended amount","net amount","subtotal","grand total"}
+UPRICE_KEYS   = {"unit_price","unit price","unit rate","rate","u.rate","unit_price_sar","price per unit","price/unit","u rate","unit rate (sar)"}
+AMOUNT_KEYS   = {"amount","amount_sar","line_total","total","value","total_sar","total price","line amount","extended amount","net amount","subtotal","grand total","total price (sar)"}
 VENDOR_KEYS   = {"vendor","vendor_name","supplier","supplier_name","company","vendor/supplier"}
 
 AMT_RE = r'(?:SAR|SR|\$)?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)'
