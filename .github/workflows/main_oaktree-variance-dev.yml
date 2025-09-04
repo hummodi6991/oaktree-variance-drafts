@@ -22,16 +22,16 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Create and start virtual environment
         run: |
           python -m venv venv
           source venv/bin/activate
-      
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-        
+
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
       - name: Upload artifact for deployment jobs
@@ -41,6 +41,8 @@ jobs:
           path: |
             app/
             requirements.txt
+            gunicorn.conf.py
+            pyproject.toml
 
   deploy:
     runs-on: ubuntu-latest
@@ -55,7 +57,7 @@ jobs:
         with:
           name: python-app
           path: .
-      
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -63,12 +65,12 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_6ABBBFAF71E44ACD95FCEFD7F302CC3C }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_46714C56CE4D4F9781F5CDD3F65A87D4 }}
 
-      - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v3
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v2
         id: deploy-to-webapp
         with:
-          app-name: 'oaktree-variance-dev'
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
           slot-name: 'Production'
-          package: .
-          
+          package: ${{ github.workspace }}
+          startup-command: 'gunicorn -c gunicorn.conf.py app.main:app'
 
