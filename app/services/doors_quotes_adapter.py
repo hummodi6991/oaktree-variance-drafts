@@ -322,12 +322,58 @@ def adapt(xls: pd.ExcelFile, materiality_pct: float, materiality_amt_sar: float)
 
     insights = {"highlights": _highlights(_read_sheet(xls, highlights_name))} if highlights_name else {}
 
-    return {
+    payload: Dict[str, Any] = {
         "mode": "quote_compare",
         "variance_items": spreads,
         "vendor_totals": vendor_totals,
         "items_rowcount": int(items.shape[0]),
         "message": message,
-        "insights": insights
+        "insights": insights,
     }
+
+    # --- Fallback variance detector ---------------------------------------
+    if not payload.get("variance_items"):
+        try:
+            sheet_names = [n for n in xls.sheet_names if "line" in n.lower() or "item" in n.lower()] or xls.sheet_names
+            df = xls.parse(sheet_names[0]).copy()
+            df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+            vendor_col = next((c for c in ["vendor_name","vendor","supplier","company"] if c in df.columns), None)
+            item_col   = next((c for c in ["item_code","item","description","product","model"] if c in df.columns), None)
+            unit_col   = next((c for c in ["unit_price_sar","unit_price","unit_rate","price","unit_cost","rate"] if c in df.columns), None)
+            if vendor_col and item_col and unit_col:
+                df[unit_col] = df[unit_col].apply(_strip_to_number)
+                base = df[[item_col, vendor_col, unit_col]].dropna()
+                vc = base.groupby(item_col)[vendor_col].nunique()
+                multi = vc[vc >= 2].index
+                base = base[base[item_col].isin(multi)]
+                if len(base):
+                    g = base.groupby(item_col)[unit_col]
+                    spread = pd.DataFrame({
+                        "item_code": g.apply(lambda s: s.name),
+                        "min_unit_price_sar": g.min(),
+                        "max_unit_price_sar": g.max(),
+                    }).reset_index(drop=True)
+                    spread["unit_price_spread_sar"] = spread["max_unit_price_sar"] - spread["min_unit_price_sar"]
+                    spread["unit_price_spread_pct"] = np.where(
+                        spread["min_unit_price_sar"] > 0,
+                        (spread["unit_price_spread_sar"] / spread["min_unit_price_sar"]) * 100,
+                        np.nan,
+                    )
+                    payload["variance_items"] = (
+                        spread.sort_values("unit_price_spread_sar", ascending=False).to_dict("records")
+                    )
+        except Exception as e:  # pragma: no cover - defensive
+            payload.setdefault("debug_notes", []).append(f"fallback_variance_failed: {e}")
+
+    # --- Attach report markdown -------------------------------------------
+    try:
+        from app.services.singlefile import _build_report_markdown_for_quote_compare
+
+        payload["report_markdown"] = _build_report_markdown_for_quote_compare(
+            payload, getattr(xls, "io", "workbook")
+        )
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+    return payload
 
