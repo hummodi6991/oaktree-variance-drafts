@@ -57,6 +57,20 @@ async def from_file(file: UploadFile = File(...)):
                 "insights": processed.get("insights", {}),
             }
 
+        # NEW: quote-compare workbooks (e.g., doors_quotes_complete.xlsx)
+        # Map the service payload through as a first-class kind so the UI can render it.
+        if processed.get("mode") == "quote_compare":
+            return {
+                "kind": "quote_compare",
+                # 'variance_items' here are "spreads" flagged by materiality rules
+                "spreads": processed.get("variance_items") or [],
+                "vendor_totals": processed.get("vendor_totals") or [],
+                "insights": processed.get("insights", {}),
+                "message": processed.get("message"),
+                # pass diagnostics through when present
+                "diagnostics": processed.get("diagnostics"),
+            }
+
         items = processed.get("items") or []
         if items:
             insights = compute_procurement_insights(items)
