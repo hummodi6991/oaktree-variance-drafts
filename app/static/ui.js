@@ -30,6 +30,9 @@ async function generateFromSingleFile() {
   } else {
     renderSingleFileError('No budget/actuals found and no recognizable procurement lines. Please upload budget/actuals CSV/Excel for variance, or a quote/BOQ for procurement.');
   }
+  if (data && data.diagnostics) {
+    renderDiagnostics(data.diagnostics);
+  }
 }
 
 function renderVarianceDraftCards(items) {
@@ -90,5 +93,83 @@ function renderNotice(msg) {
   } catch (_) {
     console.warn(msg);
   }
+}
+
+function renderDiagnostics(diag) {
+  const container = document.getElementById('results') || document.body;
+  const section = document.createElement('section');
+  section.className = 'diagnostics';
+
+  const details = document.createElement('details');
+  details.open = false;
+  const summary = document.createElement('summary');
+  summary.textContent = 'Diagnostics';
+  details.appendChild(summary);
+
+  const meta = document.createElement('div');
+  meta.innerHTML = `
+    <div style="margin:8px 0;">
+      <strong>Correlation ID:</strong> <code>${escapeHtml(diag.correlation_id || '')}</code><br/>
+      <strong>Duration:</strong> ${Number(diag.duration_ms||0)} ms<br/>
+      <strong>Sheets/Steps:</strong> ${Array.isArray(diag.events) ? diag.events.length : 0} events,
+      <strong>Warnings:</strong> ${Array.isArray(diag.warnings) ? diag.warnings.length : 0}
+    </div>
+  `;
+  details.appendChild(meta);
+
+  if (Array.isArray(diag.warnings) && diag.warnings.length) {
+    const w = document.createElement('div');
+    w.innerHTML = `<strong>Warnings</strong>`;
+    const ul = document.createElement('ul');
+    diag.warnings.forEach(wrn => {
+      const li = document.createElement('li');
+      li.textContent = `[${wrn.code}] ${wrn.message || ''}`;
+      ul.appendChild(li);
+    });
+    w.appendChild(ul);
+    details.appendChild(w);
+  }
+
+  const pre = document.createElement('pre');
+  pre.style.whiteSpace = 'pre-wrap';
+  const json = JSON.stringify(diag, null, 2);
+  pre.textContent = json;
+
+  const bar = document.createElement('div');
+  bar.style.display = 'flex';
+  bar.style.gap = '8px';
+  bar.style.margin = '8px 0';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = 'Copy diagnostics JSON';
+  copyBtn.onclick = async () => {
+    try { await navigator.clipboard.writeText(json); toast('Copied diagnostics'); }
+    catch (e) { toast('Copy failed'); }
+  };
+  bar.appendChild(copyBtn);
+
+  details.appendChild(bar);
+  details.appendChild(pre);
+  section.appendChild(details);
+  container.appendChild(section);
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
+}
+
+function toast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.position='fixed'; t.style.bottom='16px'; t.style.right='16px';
+  t.style.background='#333'; t.style.color='#fff'; t.style.padding='8px 12px'; t.style.borderRadius='6px';
+  t.style.zIndex=9999; t.style.opacity='0.95';
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 2000);
 }
 

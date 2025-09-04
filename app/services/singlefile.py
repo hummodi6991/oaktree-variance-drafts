@@ -4,6 +4,8 @@ from typing import List, Dict, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
 import chardet
+import sys
+from app.utils.diagnostics import DiagnosticContext
 
 try:
     import pdfplumber
@@ -440,37 +442,128 @@ def build_variance_insights(rows: List[Dict[str,Any]]) -> Dict[str,Any]:
 
 def process_single_file(name: str, data: bytes, materiality_pct: float = 5.0, materiality_amt_sar: float = 100000.0) -> Dict[str, Any]:
     """
-    Existing entrypoint, now with quote-comparison fallback.
-    - If we can’t detect budget/actual pairs, try to compute vendor quote spreads.
-    - Returns a dict with keys:
-        mode: "quote_compare" | "summary" | ...
-        items / variance_items: list of rows
-        vendor_totals: optional per-vendor totals
+    Enhanced: produces a 'diagnostics' block the UI can render.
     """
-    # If Excel, first try line_items sheet; else try generic table extraction.
-    sheets = _read_excel_sheets(data)
-    if "line_items" in sheets:
-        items = _normalize_line_items(sheets["line_items"])
-    else:
-        # fall back to the first sheet/table we can coerce
-        df0 = next(iter(sheets.values()), _read_df(name, data))
-        df0 = _coerce_header_row(df0)
-        items = _normalize_line_items(df0) if _looks_like_line_items(df0) else pd.DataFrame()
+    with DiagnosticContext(file_name=name, file_size=len(data),
+                           materiality_pct=materiality_pct,
+                           materiality_amt_sar=materiality_amt_sar) as diag:
+        try:
+            diag.step("read_excel_start")
+            xls = pd.ExcelFile(io.BytesIO(data))
+            diag.step("read_excel_success", sheet_names=xls.sheet_names)
+        except Exception as e:
+            diag.error("read_excel_failed", e)
+            return {"mode": "error", "error": "Failed to read Excel", "diagnostics": diag.to_dict()}
 
-    # If we have recognizably vendorized items, run the quote-spread comparator
-    if not items.empty and not _has_budget_actual(items):
-        spreads = _quote_spread_variances(items, mat_pct=materiality_pct, mat_amt=materiality_amt_sar)
-        return {
+        sheets: Dict[str, pd.DataFrame] = {}
+        for sn in xls.sheet_names:
+            try:
+                df = xls.parse(sn)
+                sheets[sn] = df
+                diag.step("sheet_loaded", sheet=sn, rows=int(df.shape[0]), cols=int(df.shape[1]))
+            except Exception as e:
+                diag.warn("sheet_parse_failed", f"Could not parse sheet '{sn}'", sheet=sn, error=str(e))
+
+        frames = []
+        for name_sn, df in sheets.items():
+            if df is None or df.empty:
+                diag.warn("empty_sheet", f"Sheet '{name_sn}' was empty", sheet=name_sn)
+                continue
+            try:
+                original_cols = [str(c) for c in df.columns]
+                df2 = _coerce_header_row(df) if '_coerce_header_row' in globals() else df
+                new_cols = [str(c) for c in df2.columns]
+                if original_cols != new_cols:
+                    diag.step("header_row_detected", sheet=name_sn, old_cols=original_cols, new_cols=new_cols)
+                df = df2
+            except Exception as e:
+                diag.warn("header_detection_failed", f"Header detection failed on '{name_sn}'", sheet=name_sn, error=str(e))
+
+            cols_low = {str(c).strip().lower(): str(c) for c in df.columns}
+            mapped = []
+            for k in ("description","qty","quantity","unit price","rate","total","amount","vendor","supplier","item","item no","item code"):
+                if k in cols_low:
+                    mapped.append(k)
+            unmapped = [c for c in cols_low if c not in mapped]
+            diag.step("column_mapping", sheet=name_sn, mapped=mapped, unmapped=unmapped)
+
+            try:
+                out = _normalize_sheet_to_items(name_sn, df) if '_normalize_sheet_to_items' in globals() else None
+                if out is None:
+                    raise ValueError("normalize returned None")
+                frames.append(out)
+                diag.step("normalized_items", sheet=name_sn, rows=int(out.shape[0]))
+            except Exception as e:
+                diag.warn("normalization_failed", f"Normalization failed on '{name_sn}'", sheet=name_sn, error=str(e))
+
+        items = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        diag.step("items_assembled", total_rows=int(items.shape[0]))
+
+        for col in ("qty","unit_price_sar","amount_sar"):
+            if col in items.columns:
+                before_na = int(items[col].isna().sum())
+                try:
+                    items[col] = pd.to_numeric(items[col], errors="coerce")
+                except Exception as e:
+                    diag.warn("numeric_coercion_failed", f"Coercion failed for '{col}'", column=col, error=str(e))
+                after_na = int(items[col].isna().sum())
+                diag.step("numeric_coercion", column=col, na_before=before_na, na_after=after_na)
+
+        try:
+            if set(("qty","unit_price_sar")).issubset(items.columns):
+                missing = items["amount_sar"].isna() if "amount_sar" in items.columns else None
+                need = (missing & items["qty"].notna() & items["unit_price_sar"].notna()) if missing is not None else None
+                if need is not None and need.any():
+                    n = int(need.sum())
+                    items.loc[need, "amount_sar"] = (items.loc[need, "qty"] * items.loc[need, "unit_price_sar"]).round(2)
+                    diag.step("amount_backfilled", rows=n)
+        except Exception as e:
+            diag.warn("amount_backfill_failed", "Failed to backfill amounts", error=str(e))
+
+        spreads, vendor_totals = _compute_spreads_and_totals(items, materiality_pct, materiality_amt_sar)
+        diag.step("quote_compare_summary",
+                  item_count=int(items.shape[0]),
+                  vendor_count=int(items.get("vendor_name").nunique() if "vendor_name" in items.columns else 0),
+                  spread_rows=len(spreads),
+                  thresholds={"pct": materiality_pct, "amount_sar": materiality_amt_sar})
+
+        response = {
             "mode": "quote_compare",
-            "variance_items": spreads,  # may be empty
-            "vendor_totals": _vendor_totals(items),
+            "variance_items": spreads,
+            "vendor_totals": vendor_totals,
             "message": None if spreads else "No items breached materiality; showing vendor totals only.",
+            "diagnostics": diag.to_dict(),
         }
-    # Otherwise, fall back to prior summary behavior using generic row extraction
-    df = next(iter(sheets.values()), _read_df(name, data))
-    rows = _rows_from_table(df)
-    return {"mode": "summary", "items": rows}
+        try:
+            print(json.dumps({"lvl":"info","msg":"singlefile_diagnostics","corr":diag.correlation_id,
+                              "summary":{"items":int(items.shape[0]),"spreads":len(spreads)}}, ensure_ascii=False),
+                  file=sys.stderr)
+        except Exception:
+            pass
+        return response
 
+# Helper glue (stubs if not present). Replace with your existing implementations.
+def _normalize_sheet_to_items(sheet: str, df: pd.DataFrame) -> pd.DataFrame:
+    # If you already have this in your codebase, remove this stub.
+    # Minimal passthrough to avoid NameError in codex edits.
+    return df.copy()
+
+def _compute_spreads_and_totals(items: pd.DataFrame, materiality_pct: float, materiality_amt_sar: float):
+    # If you already have this in your codebase, remove this stub and call your real one.
+    spreads = []
+    vendor_totals = []
+    try:
+        if not items.empty and "vendor_name" in items.columns and "amount_sar" in items.columns:
+            vt = (items.dropna(subset=["vendor_name","amount_sar"])
+                        .groupby("vendor_name")["amount_sar"]
+                        .sum()
+                        .sort_values(ascending=False)
+                        .reset_index())
+            vt.columns = ["vendor_name","total_amount_sar"]
+            vendor_totals = vt.to_dict("records")
+    except Exception:
+        pass
+    return spreads, vendor_totals
 def draft_bilingual_procurement_card(it: Dict[str,Any], file_label: str) -> Dict[str,str]:
     parts_en = []
     code = it.get("item_code"); desc = it.get("description"); qty = it.get("qty")

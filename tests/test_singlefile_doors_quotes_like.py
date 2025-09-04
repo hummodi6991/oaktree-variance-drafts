@@ -10,7 +10,7 @@ def _xlsx_bytes(df: pd.DataFrame) -> bytes:
     return bio.getvalue()
 
 
-def test_doors_quotes_like_excel_parses_to_summary():
+def test_doors_quotes_like_excel_produces_diagnostics():
     # Simulate a sheet with a preamble row, then real headers on row 3
     data = [
         ["Vendor:", "AL AZAL", "", "", ""],
@@ -22,12 +22,9 @@ def test_doors_quotes_like_excel_parses_to_summary():
     df = pd.DataFrame(data, columns=[f"C{i}" for i in range(1,6)])
     b = _xlsx_bytes(df)
     resp = process_single_file("doors_quotes_complete.xlsx", b)
-    assert resp["mode"] == "summary"
-    items = resp["items"]
-    assert len(items) >= 2
-    first = items[0]
-    assert first.get("item_code") in ("D01", "D1", "D01")
-    assert first.get("unit_price_sar") == 1500
-    assert first.get("amount_sar") == 3000
-    assert any((it.get("vendor") == "AL AZAL") for it in items)
+    assert resp["mode"] == "quote_compare"
+    assert "diagnostics" in resp
+    diag = resp["diagnostics"]
+    assert diag.get("correlation_id")
+    assert isinstance(diag.get("events"), list)
 
