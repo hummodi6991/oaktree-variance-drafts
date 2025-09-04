@@ -105,6 +105,7 @@ async def from_file(file: UploadFile = File(...)):
                     **processed.get("insights", {}),
                 },
                 "diagnostics": processed.get("diagnostics"),
+                "report_markdown": processed.get("report_markdown"),
                 "message": processed.get("message") or "Price comparison insights.",
             }
 
