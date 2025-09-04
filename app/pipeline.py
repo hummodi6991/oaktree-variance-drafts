@@ -130,6 +130,84 @@ def _summarize_change_orders(change_orders: List[ChangeOrderRow], cat_lu: Dict[s
         },
     }
 
+def _choose_amount_key(sample: Dict[str, Any]) -> str | None:
+    """Pick an amount-like column from arbitrary tabular rows (case-insensitive)."""
+    if not sample:
+        return None
+    keys = [k for k in sample.keys()]
+    candidates = [
+        "amount_sar", "amount", "value", "price", "cost", "total", "total_sar", "net_amount",
+    ]
+    lower = {k.lower(): k for k in keys}
+    for c in candidates:
+        if c in lower:
+            return lower[c]
+    for k in keys:
+        v = sample[k]
+        if isinstance(v, (int, float)):
+            return k
+    return None
+
+def _summarize_generic_rows(rows: List[Dict[str, Any]], label: str = "rows") -> Dict[str, Any]:
+    """Generic summarizer for arbitrary uploaded tables without budget/actuals."""
+    from collections import defaultdict
+    rows = rows or []
+    if not rows:
+        return {
+            "kind": "summary",
+            "message": "No budget/actuals detected — file contained no tabular rows to summarize.",
+            "insights": {},
+        }
+    amount_key = _choose_amount_key(rows[0])
+    if not amount_key:
+        return {
+            "kind": "summary",
+            "message": "No budget/actuals detected — could not identify an amount column to summarize.",
+            "insights": {
+                "row_count": len(rows),
+                "sample_keys": list(rows[0].keys()),
+            },
+        }
+    group_keys: List[str] = []
+    preferred = ["category", "cost_code", "linked_cost_code", "vendor", "vendor_name", "project_id"]
+    lower = {k.lower(): k for k in rows[0].keys()}
+    for p in preferred:
+        if p in lower:
+            group_keys.append(lower[p])
+    total = 0.0
+    by_group: Dict[str, float] = defaultdict(float)
+    top: List[Dict[str, Any]] = []
+    for r in rows:
+        try:
+            amt = float(r.get(amount_key)) if r.get(amount_key) is not None else None
+        except Exception:
+            amt = None
+        if amt is None:
+            continue
+        total += amt
+        if group_keys:
+            gvals = [str(r.get(k) or "Uncategorized") for k in group_keys]
+            glabel = " / ".join(gvals)
+            by_group[glabel] += amt
+        short = {k: r.get(k) for k in [amount_key] + group_keys if k in r}
+        top.append(short)
+    top = sorted(top, key=lambda d: d.get(amount_key) or 0.0, reverse=True)[:20]
+    totals_by_group = [
+        {"group": k, "total_amount": round(v, 2)} for k, v in sorted(by_group.items(), key=lambda x: -x[1])
+    ]
+    return {
+        "kind": "summary",
+        "message": "No budget/actuals detected — showing generic summary.",
+        "insights": {
+            "row_count": len(rows),
+            "amount_column": amount_key,
+            "total_amount": round(total, 2),
+            "totals_by_group": totals_by_group,
+            "top_rows_by_amount": top,
+            "label": label,
+        },
+    }
+
 def filter_materiality(items: List[VarianceItem], cfg: ConfigModel) -> List[VarianceItem]:
     return [v for v in items if abs(v.variance_pct) >= cfg.materiality_pct or abs(v.variance_sar) >= cfg.materiality_amount_sar]
 
@@ -151,15 +229,24 @@ def generate_drafts(
     if items:
         attach_drivers_and_vendors(items, req.change_orders, req.vendor_map, cat_lu)
     else:
-        # NEW behavior: if we have no budget/actual pairs, do NOT fabricate
-        # variance drafts from change orders. Return a summary+insights instead.
+        # No budget/actuals: return summary+insights (generic across uploads)
         if req.change_orders:
             progress_cb(40, "Summarizing change orders")
             return _summarize_change_orders(req.change_orders, cat_lu)
-        # Nothing useful to summarize
+        if getattr(req, "raw_rows", None):
+            progress_cb(40, "Summarizing uploaded rows")
+            return _summarize_generic_rows(req.raw_rows, label="single_file")
+        if getattr(req, "vendor_map", None):
+            progress_cb(40, "Summarizing vendor map")
+            rows = [v.dict() if hasattr(v, "dict") else dict(v) for v in req.vendor_map]
+            return _summarize_generic_rows(rows, label="vendor_map")
+        if getattr(req, "category_map", None):
+            progress_cb(40, "Summarizing category map")
+            rows = [v.dict() if hasattr(v, "dict") else dict(v) for v in req.category_map]
+            return _summarize_generic_rows(rows, label="category_map")
         return {
             "kind": "summary",
-            "message": "No budget/actuals or change-order rows detected.",
+            "message": "No budget/actuals detected and no tabular data available to summarize.",
             "insights": {},
         }
 
