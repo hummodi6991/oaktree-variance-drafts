@@ -18,6 +18,15 @@ async function generateFromSingleFile() {
     return;
   }
 
+  // NEW: handle quote-compare payloads from /drafts/from-file
+  const isQuoteCompare = (data && (data.kind === 'quote_compare' || data.mode === 'quote_compare'));
+  if (isQuoteCompare) {
+    if (data.message) renderNotice(data.message);
+    renderQuoteCompare(data);
+    if (data.diagnostics) { renderDiagnostics(data.diagnostics); }
+    return;
+  }
+
   const variance = (data.variance_items || []);
   const hasVariance = Array.isArray(variance) && variance.length > 0;
   const procurement = (data.procurement_summary && data.procurement_summary.items)
@@ -70,6 +79,79 @@ function renderProcurementSummary({ items, insights }) {
     const pre = document.createElement('pre');
     pre.textContent = JSON.stringify(insights, null, 2);
     box.appendChild(pre);
+  }
+}
+
+// --- NEW: quote-compare rendering ---
+function renderQuoteCompare(payload) {
+  const box = document.getElementById('result_box');
+  box.innerHTML = '';
+
+  const spreads = Array.isArray(payload.spreads) ? payload.spreads : (payload.variance_items || []);
+  const totals  = Array.isArray(payload.vendor_totals) ? payload.vendor_totals : [];
+
+  if (spreads && spreads.length) {
+    const table = document.createElement('table');
+    table.className = 'table';
+    table.style.width = '100%';
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Best Vendor</th>
+          <th>Best Unit (SAR)</th>
+          <th>Worst Vendor</th>
+          <th>Worst Unit (SAR)</th>
+          <th>Unit Δ (SAR)</th>
+          <th>Spread %</th>
+          <th>Total Δ (SAR)</th>
+        </tr>
+      </thead>
+      <tbody></tbody>`;
+    const tbody = table.querySelector('tbody');
+    spreads.forEach(s => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(s.item_code || s.description || '—')}</td>
+        <td>${escapeHtml(s.min_vendor || '—')}</td>
+        <td>${s.min_unit_sar ?? '—'}</td>
+        <td>${escapeHtml(s.max_vendor || '—')}</td>
+        <td>${s.max_unit_sar ?? '—'}</td>
+        <td>${s.unit_spread_sar ?? '—'}</td>
+        <td>${s.spread_pct != null ? s.spread_pct + '%' : '—'}</td>
+        <td>${s.total_spread_sar ?? '—'}</td>`;
+      tbody.appendChild(tr);
+    });
+    box.appendChild(table);
+  } else if (totals && totals.length) {
+    const table = document.createElement('table');
+    table.className = 'table';
+    table.style.width = '100%';
+    table.innerHTML = `
+      <thead>
+        <tr><th>Vendor</th><th>Total Amount (SAR)</th></tr>
+      </thead>
+      <tbody></tbody>`;
+    const tbody = table.querySelector('tbody');
+    totals.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${escapeHtml(r.vendor_name || '—')}</td><td>${r.total_amount_sar ?? '—'}</td>`;
+      tbody.appendChild(tr);
+    });
+    box.appendChild(table);
+  } else {
+    box.innerText = 'No quote spreads or vendor totals found.';
+  }
+
+  // Optional: show highlights (if provided by backend)
+  if (payload.insights && Array.isArray(payload.insights.highlights) && payload.insights.highlights.length) {
+    const h = document.createElement('div');
+    h.style.marginTop = '12px';
+    const title = document.createElement('h3'); title.textContent = 'Highlights'; h.appendChild(title);
+    const ul = document.createElement('ul');
+    payload.insights.highlights.forEach(t => { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); });
+    h.appendChild(ul);
+    box.appendChild(h);
   }
 }
 
