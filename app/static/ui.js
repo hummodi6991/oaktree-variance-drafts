@@ -9,10 +9,12 @@ async function generateFromSingleFile() {
   try { data = await resp.json(); } catch (_) {}
   if (!resp.ok) {
     renderSingleFileError((data && data.error) ? data.error : `Request failed (HTTP ${resp.status})`);
+    if (data && data.diagnostics) { renderDiagnostics(data.diagnostics); }
     return;
   }
   if (data && data.error) {
     renderSingleFileError(data.error);
+    if (data.diagnostics) { renderDiagnostics(data.diagnostics); }
     return;
   }
 

@@ -1102,16 +1102,8 @@ async def drafts_from_file(
 ):
     data = await file.read()
     parsed = parse_single_file(file.filename, data)
-
-    # If we found variance items, return them as-is (UI already knows how to render)
-    if "variance_items" in parsed:
-        return JSONResponse(parsed)
-
-    # Otherwise, return Procurement Summary skeleton (UI will render dedicated cards)
-    if "procurement_summary" in parsed:
-        return JSONResponse(parsed)
-
-    return JSONResponse({"procurement_summary": {"items": [], "meta": {}}})
+    status = 400 if parsed.get("error") else 200
+    return JSONResponse(parsed, status_code=status)
 
 
 # ---------------- In-memory job store (lightweight) ------------------------
