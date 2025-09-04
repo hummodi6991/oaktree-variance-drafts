@@ -2,7 +2,8 @@
 """Pydantic data models for the Variance Drafts service."""
 
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Any, Dict, Union
+from typing_extensions import Literal
 
 class BudgetActualRow(BaseModel):
     project_id: str
@@ -66,6 +67,14 @@ class DraftResponse(BaseModel):
     draft_ar: Optional[str] = None
     analyst_notes: Optional[str] = None
 
+
+class SummaryResponse(BaseModel):
+    kind: Literal["summary"] = "summary"
+    message: str
+    insights: Dict[str, Any] = Field(default_factory=dict)
+
+
+DraftsOrSummary = Union[List[DraftResponse], SummaryResponse]
 
 class ProcurementItem(BaseModel):
     """Lightweight summary card for single-file procurement uploads."""
