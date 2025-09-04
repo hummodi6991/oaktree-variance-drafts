@@ -6,6 +6,7 @@ import numpy as np
 import chardet
 import sys
 from app.utils.diagnostics import DiagnosticContext
+from app.services.insights import generate_insights_for_workbook
 
 try:
     import pdfplumber
@@ -442,7 +443,7 @@ def build_variance_insights(rows: List[Dict[str,Any]]) -> Dict[str,Any]:
 
 def process_single_file(name: str, data: bytes, materiality_pct: float = 5.0, materiality_amt_sar: float = 100000.0) -> Dict[str, Any]:
     """
-    Enhanced: produces a 'diagnostics' block the UI can render.
+    Enhanced: if the workbook lacks budget/actual pairs, summarize & surface insights.
     """
     with DiagnosticContext(file_name=name, file_size=len(data),
                            materiality_pct=materiality_pct,
@@ -520,23 +521,47 @@ def process_single_file(name: str, data: bytes, materiality_pct: float = 5.0, ma
         except Exception as e:
             diag.warn("amount_backfill_failed", "Failed to backfill amounts", error=str(e))
 
-        spreads, vendor_totals = _compute_spreads_and_totals(items, materiality_pct, materiality_amt_sar)
-        diag.step("quote_compare_summary",
-                  item_count=int(items.shape[0]),
-                  vendor_count=int(items.get("vendor_name").nunique() if "vendor_name" in items.columns else 0),
-                  spread_rows=len(spreads),
-                  thresholds={"pct": materiality_pct, "amount_sar": materiality_amt_sar})
+        # === Decide path ===
+        has_budget = any(k in (c.lower() for c in items.columns) for k in ("budget","budget_sar","budgeted")) if not items.empty else False
+        has_actual = any(k in (c.lower() for c in items.columns) for k in ("actual","actual_sar","spent","cost")) if not items.empty else False
 
-        response = {
-            "mode": "quote_compare",
-            "variance_items": spreads,
-            "vendor_totals": vendor_totals,
-            "message": None if spreads else "No items breached materiality; showing vendor totals only.",
-            "diagnostics": diag.to_dict(),
-        }
+        if has_budget and has_actual:
+            # (Existing budget/actual path remains unchanged)
+            spreads, vendor_totals = _compute_spreads_and_totals(items, materiality_pct, materiality_amt_sar)
+            diag.step("path_selected", mode="budget_actual")
+            response = {
+                "mode": "quote_compare",
+                "variance_items": spreads,
+                "vendor_totals": vendor_totals,
+                "message": None if spreads else "No items breached materiality; showing vendor totals only.",
+                "diagnostics": diag.to_dict(),
+            }
+        elif not items.empty:
+            # Treat as quote-compare style workbook even without budget/actuals
+            spreads, vendor_totals = _compute_spreads_and_totals(items, materiality_pct, materiality_amt_sar)
+            diag.step("path_selected", mode="quote_compare")
+            response = {
+                "mode": "quote_compare",
+                "variance_items": spreads,
+                "vendor_totals": vendor_totals,
+                "message": None if spreads else "No items breached materiality; showing vendor totals only.",
+                "diagnostics": diag.to_dict(),
+            }
+        else:
+            # No recognizable procurement items → summarize workbook insights
+            diag.step("path_selected", mode="insights_fallback")
+            workbook_insights = generate_insights_for_workbook(sheets)
+            response = {
+                "mode": "insights",
+                "insights": workbook_insights,
+                "diagnostics": diag.to_dict(),
+            }
         try:
+            summary = {"items": int(items.shape[0])}
+            if response.get("mode") == "quote_compare":
+                summary["spreads"] = len(response.get("variance_items") or [])
             print(json.dumps({"lvl":"info","msg":"singlefile_diagnostics","corr":diag.correlation_id,
-                              "summary":{"items":int(items.shape[0]),"spreads":len(spreads)}}, ensure_ascii=False),
+                              "summary": summary}, ensure_ascii=False),
                   file=sys.stderr)
         except Exception:
             pass

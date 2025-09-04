@@ -173,3 +173,69 @@ function toast(msg) {
   setTimeout(()=>t.remove(), 2000);
 }
 
+// --- Insights rendering ---
+function renderResult(payload) {
+  // existing rendering...
+  if (!payload) return;
+  if (payload.mode === 'insights' && payload.insights) {
+    renderInsights(payload.insights);
+  }
+  if (payload.diagnostics) {
+    renderDiagnostics(payload.diagnostics);
+  }
+}
+
+function renderInsights(ins) {
+  const root = document.getElementById('results') || document.body;
+  const wrap = document.createElement('section');
+  wrap.className = 'insights';
+
+  // Highlights
+  if (Array.isArray(ins.highlights) && ins.highlights.length) {
+    const h = document.createElement('div');
+    h.innerHTML = '<h3>Highlights</h3>';
+    const ul = document.createElement('ul');
+    ins.highlights.forEach(t => {
+      const li = document.createElement('li'); li.textContent = t; ul.appendChild(li);
+    });
+    h.appendChild(ul);
+    wrap.appendChild(h);
+  }
+
+  // KPI cards
+  if (Array.isArray(ins.cards) && ins.cards.length) {
+    const cards = document.createElement('div');
+    cards.style.display = 'grid';
+    cards.style.gridTemplateColumns = 'repeat(auto-fit, minmax(200px, 1fr))';
+    cards.style.gap = '12px';
+    ins.cards.forEach(c => {
+      const card = document.createElement('div');
+      card.style.border = '1px solid #ddd'; card.style.borderRadius = '8px'; card.style.padding = '10px';
+      const title = document.createElement('div'); title.textContent = c.title || c.sheet || 'Metric'; title.style.fontWeight = '600';
+      const val = document.createElement('div'); val.textContent = (c.value_sar !== undefined) ? `${c.value_sar} SAR` : (c.value || '');
+      card.appendChild(title); card.appendChild(val); cards.appendChild(card);
+    });
+    wrap.appendChild(cards);
+  }
+
+  // Tables
+  if (ins.tables && typeof ins.tables === 'object') {
+    const keys = Object.keys(ins.tables);
+    keys.forEach(name => {
+      const tblData = ins.tables[name];
+      const sec = document.createElement('details');
+      sec.open = false;
+      const sum = document.createElement('summary');
+      sum.textContent = name;
+      sec.appendChild(sum);
+      const pre = document.createElement('pre');
+      pre.style.whiteSpace = 'pre-wrap';
+      pre.textContent = JSON.stringify(tblData, null, 2);
+      sec.appendChild(pre);
+      wrap.appendChild(sec);
+    });
+  }
+
+  root.appendChild(wrap);
+}
+
