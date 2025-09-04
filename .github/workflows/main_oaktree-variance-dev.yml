@@ -56,7 +56,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-app
-          path: .
+          path: ${{ github.workspace }}/python-app
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -69,8 +69,8 @@ jobs:
         uses: azure/webapps-deploy@v2
         id: deploy-to-webapp
         with:
-          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          app-name: oaktree-variance-dev
           slot-name: 'Production'
-          package: ${{ github.workspace }}
+          package: ${{ github.workspace }}/python-app
           startup-command: 'gunicorn -c gunicorn.conf.py app.main:app'
 
