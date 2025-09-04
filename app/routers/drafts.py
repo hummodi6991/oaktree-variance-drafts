@@ -61,7 +61,21 @@ async def from_file(file: UploadFile = File(...)):
             }
 
         items = (parsed.get("procurement_summary") or {}).get("items") or []
-        if items:
+        # Only treat procurement items as valid if they contain real economics
+        # (at least one numeric amount/unit price). Otherwise, fall through to
+        # the workbook pipeline (doors_quotes adapter, general insights, etc.).
+        def _has_economics(rows):
+            for it in rows or []:
+                for k in ("amount_sar", "unit_price_sar"):
+                    v = it.get(k)
+                    try:
+                        if v is not None and float(str(v).replace(",", "")) > 0:
+                            return True
+                    except Exception:
+                        continue
+            return False
+
+        if items and _has_economics(items):
             insights = compute_procurement_insights(items)
             return {
                 "kind": "procurement",
@@ -71,15 +85,27 @@ async def from_file(file: UploadFile = File(...)):
                 "diagnostics": parsed.get("diagnostics"),
             }
 
-        # Fallback: try the workbook insights pipeline
+        # Fallback: try the workbook insights/quotes pipeline
         processed = await asyncio.to_thread(process_single_file, file.filename, data)
         processed = processed or {}
         if processed.get("mode") == "insights":
             return {
                 "kind": "insights",
-                "insights": processed.get("insights", {}),
+                "insights": parsed.get("insights", {}) or processed.get("insights", {}),
                 "diagnostics": processed.get("diagnostics"),
                 "message": processed.get("message"),
+            }
+        if processed.get("mode") == "quote_compare":
+            # Map the quote-comparison payload to a generic insights response
+            return {
+                "kind": "insights",
+                "insights": {
+                    "vendor_totals": processed.get("vendor_totals", []),
+                    "price_spreads": processed.get("variance_items", []),
+                    **processed.get("insights", {}),
+                },
+                "diagnostics": processed.get("diagnostics"),
+                "message": processed.get("message") or "Price comparison insights.",
             }
 
         return {
