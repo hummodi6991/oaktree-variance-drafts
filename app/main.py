@@ -43,7 +43,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 
-from .schemas import DraftRequest, DraftResponse, ProcurementItem, VendorSnapshot
+from .schemas import (
+    DraftRequest,
+    ProcurementItem,
+    VendorSnapshot,
+    DraftsOrSummary,
+)
 from .pipeline import generate_drafts
 from .services.csv_loader import parse_tabular
 from app.services.singlefile import process_single_file, draft_bilingual_procurement_card
@@ -697,7 +702,7 @@ async def get_job(job_id: str):
 def ceo_ui():
     return FileResponse("app/templates/ui.html")
 
-@app.post("/drafts", response_model=List[DraftResponse], dependencies=deps)
+@app.post("/drafts", response_model=DraftsOrSummary, dependencies=deps)
 def create_drafts(req: DraftRequest):
     """Create EN/AR variance explanation drafts."""
     return generate_drafts(req)
@@ -1005,7 +1010,7 @@ def _build_payload(
     }
 
 
-@app.post("/drafts/upload", response_model=List[DraftResponse])
+@app.post("/drafts/upload", response_model=DraftsOrSummary)
 async def drafts_upload(
     budget_actuals: UploadFile = File(..., description="Budget–Actuals CSV/XLS/XLSX"),
     change_orders: UploadFile = File(..., description="Change Orders CSV/XLS/XLSX"),
