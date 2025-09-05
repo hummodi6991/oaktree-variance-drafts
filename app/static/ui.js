@@ -81,7 +81,7 @@ function renderInsights(ins) {
 
 function renderVarianceDraftCards(items) {
   const box = document.getElementById('result_box');
-  if (!items.length) { box.innerText = 'No variance items found.'; return; }
+  if (!items.length) { box.innerText = 'No budget-vs-actual data detected.'; return; }
   box.innerHTML = '';
   items.forEach(it => {
     const div = document.createElement('div');

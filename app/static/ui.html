@@ -403,7 +403,7 @@
         return;
       }
 
-      setStatus('No variance items found.');
+      setStatus('No budget-vs-actual data detected.');
     } catch (e) {
       setStatus('Load failed');
       showError(e.message || e.toString());
