@@ -380,26 +380,46 @@
       const data = await res.json();
       clearReport();
 
-      if (data.procurement_summary && data.procurement_summary.items && data.procurement_summary.items.length) {
-        renderProcurementSummary(data.procurement_summary);
-        setStatus('Done');
-        return;
-      }
       if (data.variance_items && data.variance_items.length) {
         renderVarianceList(data.variance_items);
         setStatus('Done');
         return;
       }
-      setStatus('No variance items found.');
+
+      let shown = false;
+      if (data.summary && data.summary.items && data.summary.items.length) {
+        renderProcurementSummary(data.summary.items);
+        shown = true;
+      }
+      if (data.economic_analysis) {
+        renderEconomicAnalysis(data.economic_analysis);
+        shown = true;
+      }
+      if (data.insights && data.insights !== data.economic_analysis) {
+        renderInsights(data.insights);
+        shown = true;
+      }
+
+      setStatus(shown ? 'Done' : 'No variance items found.');
     } catch (e) {
       setStatus('Load failed');
       showError(e.message || e.toString());
     }
   }
 
-  function renderProcurementSummary(ps) {
+  function appendTable(root, title, rows, cols) {
+    if (!rows || !rows.length) return;
+    const div = document.createElement('div');
+    div.className = 'card';
+    const th = cols.map(c => `<th>${escapeHtml(c)}</th>`).join('');
+    const trs = rows.slice(0, 20).map(r => `<tr>${cols.map(c => `<td>${escapeHtml(String(r[c] ?? ''))}</td>`).join('')}</tr>`).join('');
+    div.innerHTML = `<div class="card-title">${escapeHtml(title)}</div><table class="simple"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+    root.appendChild(div);
+  }
+
+  function renderProcurementSummary(items) {
     const root = ensureSection('report-root', 'Procurement Summary');
-    ps.items.forEach((it, idx) => {
+    items.forEach((it, idx) => {
       const card = document.createElement('div');
       card.className = 'card';
       card.innerHTML = `
@@ -416,6 +436,29 @@
       `;
       root.appendChild(card);
     });
+  }
+
+  function renderEconomicAnalysis(analysis) {
+    const root = ensureSection('report-root', 'Economic Analysis');
+    appendTable(root, 'Totals per vendor', analysis.totals_per_vendor || [], ['vendor','total_sar']);
+    appendTable(root, 'Top lines by amount', analysis.top_lines_by_amount || [], ['item_code','vendor_name','amount_sar']);
+  }
+
+  function renderInsights(ins) {
+    const root = ensureSection('report-root', 'Workbook Insights');
+    const highlights = (ins && ins.highlights && ins.highlights.length)
+      ? ('<ul>' + ins.highlights.map(x => `<li>${escapeHtml(x)}</li>`).join('') + '</ul>')
+      : '<p class="muted">No highlights available.</p>';
+    const cards = (ins && ins.cards)
+      ? ins.cards.map(c => `<div class="kv"><b>${escapeHtml(c.title || c.sheet || 'Metric')}</b>: ${escapeHtml(String(c.value_sar ?? c.value ?? '—'))}</div>`).join('')
+      : '';
+    const box = document.createElement('div');
+    box.className = 'card';
+    box.innerHTML = `<div class="card-title">Workbook Insights</div>${highlights}${cards}`;
+    root.appendChild(box);
+
+    appendTable(root, 'Top vendors by spend', (ins.tables && ins.tables['workbook::vendor_totals']) || [], ['vendor','total_sar']);
+    appendTable(root, 'Largest bid spreads', (ins.tables && ins.tables['workbook::vendor_spreads']) || [], ['description','min_vendor','min_unit_sar','max_vendor','max_unit_sar','spread_pct']);
   }
 </script>
 
