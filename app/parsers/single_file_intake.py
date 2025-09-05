@@ -74,37 +74,80 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
   with DiagnosticContext(file_name=filename, file_size=len(data)) as diag:
     diag.step("start", filename=name)
     if name.endswith(".pdf"):
-      # New: attempt Budget/Actual detection from PDF tables first
       diag.step("parse_pdf_start")
-      variance_rows: List[Dict[str, Any]] = []
-      try:
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-          tables_scanned = 0
-          for page in pdf.pages:
-            tbls = page.extract_tables() or []
-            for t in tbls:
-              tables_scanned += 1
-              try:
-                df = pd.DataFrame(t[1:], columns=[str(c).strip() for c in t[0]])
-              except Exception:
-                continue
-              df = _map_cols(df)
-              if _has_budget_actual(df):
-                variance_rows.extend(_emit_variance_rows(df))
-          diag.step("pdf_tables_scanned", tables=int(tables_scanned), variance_rows=int(len(variance_rows)))
-      except Exception as e:
-        diag.warn("pdf_table_scan_failed", error=str(e))
+      text = _extract_text_safe(data, diag=diag)
+      lt = text.lower()
+      if "budget" in lt and "actual" in lt:
+        variance_rows: List[Dict[str, Any]] = []
+        try:
+          with pdfplumber.open(io.BytesIO(data)) as pdf:
+            tables_scanned = 0
+            for page in pdf.pages:
+              tbls = page.extract_tables() or []
+              for t in tbls:
+                tables_scanned += 1
+                try:
+                  df = pd.DataFrame(t[1:], columns=[str(c).strip() for c in t[0]])
+                except Exception:
+                  continue
+                df = _map_cols(df)
+                if _has_budget_actual(df):
+                  variance_rows.extend(_emit_variance_rows(df))
+            diag.step("pdf_tables_scanned", tables=int(tables_scanned), variance_rows=int(len(variance_rows)))
+        except Exception as e:
+          diag.warn("pdf_table_scan_failed", error=str(e))
 
-      if variance_rows:
-        diag.step("mode_variance_pdf", rows=int(len(variance_rows)))
-        return {"variance_items": variance_rows, "diagnostics": diag.to_dict()}
+        if variance_rows:
+          diag.step("mode_variance_pdf", rows=int(len(variance_rows)))
+          return {"variance_items": variance_rows, "diagnostics": diag.to_dict()}
 
-      # Fallback: procurement summary extraction from existing PDF parser
-      ps = parse_procurement_pdf(data)
+      # Procurement path (default)
+      ps = parse_procurement_pdf(data, diag=diag, text=text)
       items = ps.get("items") or []
       diag.step("parse_pdf_success", items=len(items))
+      needs_llm = (not items) or any(
+        (i.get("qty") is None or i.get("unit_price_sar") is None or i.get("amount_sar") is None)
+        for i in items
+      )
+      if needs_llm:
+        from app.llm.extract_from_text import extract_items_via_llm
+
+        diag.step("llm_fallback_start")
+        try:
+          llm_items = extract_items_via_llm(text[:4000])
+        except Exception as e:
+          llm_items = []
+          diag.warn("llm_failed", error=str(e))
+        if llm_items:
+          diag.step("llm_fallback_success", items=len(llm_items))
+          if items:
+            for base, extra in zip(items, llm_items):
+              if base.get("qty") is None and extra.get("qty") is not None:
+                base["qty"] = extra.get("qty")
+              if base.get("unit_price_sar") is None and extra.get("unit_price_sar") is not None:
+                base["unit_price_sar"] = extra.get("unit_price_sar")
+              if base.get("amount_sar") is None and extra.get("amount_sar") is not None:
+                base["amount_sar"] = extra.get("amount_sar")
+              if base.get("description") is None and extra.get("description"):
+                base["description"] = extra.get("description")
+          else:
+            items = [
+              {
+                "item_code": it.get("co_id"),
+                "description": it.get("description"),
+                "qty": it.get("qty"),
+                "unit_price_sar": it.get("unit_price_sar"),
+                "amount_sar": it.get("amount_sar"),
+                "vendor_name": ps.get("meta", {}).get("vendor_name"),
+                "doc_date": ps.get("meta", {}).get("doc_date"),
+                "source": "uploaded_file_llm",
+              }
+              for it in llm_items
+            ]
+            ps["items"] = items
+
       if not items:
-        txt = _extract_text_safe(data)[:2000]
+        txt = text[:2000]
         if txt:
           items = [{
             "item_code": None,
@@ -117,6 +160,7 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
             "source": "uploaded_file",
           }]
           ps = {"items": items, "meta": ps.get("meta", {})}
+
       analysis = compute_procurement_insights(items, basket=DEFAULT_BASKET)
       return {
         "procurement_summary": ps,
