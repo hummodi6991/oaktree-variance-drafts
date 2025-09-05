@@ -30,10 +30,11 @@ async function generateFromSingleFile() {
     renderVarianceDraftCards(variance);
   } else if (hasProcurement || (data && (data.kind === "insights" || data.mode === "insights"))) {
     // Text-only: summary, analysis, insights (number-supported). No cards/tables/diagnostics.
+    clearWorkbookInsights();
     renderSummaryAnalysisInsightsOnly({
       summary: data.summary || {},
-      analysis: data.analysis || data.economic_analysis || {},
-      insights: data.insights || {},
+      analysis: (data.analysis && (data.analysis.text || data.analysis)) || data.economic_analysis || {},
+      insights: (data.insights && (data.insights.text || data.insights)) || {},
       summary_text: data.summary_text || ''
     });
     setStatus && setStatus('Done');
@@ -54,21 +55,22 @@ function renderSummaryAnalysisInsightsOnly(payload) {
     box.appendChild(p);
   }
 
-  // Minimal numeric bullets (supported by extracted numbers)
+  // --- Minimal numeric bullets (supported by extracted numbers)
   const ins = (insights && typeof insights === 'object') ? insights : {};
-  const totals = Array.isArray(ins.totals_per_vendor) ? ins.totals_per_vendor
-                : Array.isArray(analysis.totals_per_vendor) ? analysis.totals_per_vendor
-                : [];
+  const totalsPerVendor = Array.isArray(ins.totals_per_vendor) ? ins.totals_per_vendor
+                        : Array.isArray(analysis.totals_per_vendor) ? analysis.totals_per_vendor
+                        : (payload.summary && payload.summary.vendors) || [];
+  const totals = (payload.summary && payload.summary.totals) || {};
   const top = Array.isArray(ins.top_lines_by_amount) ? ins.top_lines_by_amount
              : Array.isArray(analysis.top_lines_by_amount) ? analysis.top_lines_by_amount
              : [];
 
   const ul = document.createElement('ul');
   // Grand total
-  if (totals.length) {
-    const grand = totals.reduce((s, r) => s + Number(r.total_sar || r.total_amount_sar || r.total || 0), 0);
+  if (totals && (totals.grand_total || totals.subtotal)) {
+    const grand = Number(totals.grand_total || 0);
     const li = document.createElement('li');
-    li.textContent = `Total spend (SAR): ${grand.toFixed(2)}`;
+    li.textContent = `Total (SAR): ${grand ? grand.toFixed(2) : Number(totals.subtotal || 0).toFixed(2)}`;
     ul.appendChild(li);
   }
   // Top 3 lines by amount
@@ -79,7 +81,33 @@ function renderSummaryAnalysisInsightsOnly(payload) {
     li.textContent = `Top ${i + 1}: ${label} — SAR ${val}`;
     ul.appendChild(li);
   });
+  // Vendor totals (compact)
+  if (totalsPerVendor && totalsPerVendor.length) {
+    const li = document.createElement('li');
+    const sum = totalsPerVendor.reduce((s,r)=> s + Number(r.total_sar || r.total || 0), 0);
+    li.textContent = `Vendors: ${totalsPerVendor.length} | Sum by vendor: SAR ${sum.toFixed(2)}`;
+    ul.appendChild(li);
+  }
   if (ul.childNodes.length) box.appendChild(ul);
+
+  // Optional: show separate "Financial analysis" and "Financial insights" blocks if provided as text
+  const analysisText = typeof analysis === 'string' ? analysis : analysis.text;
+  if (analysisText) {
+    const h = document.createElement('h4'); h.textContent = 'Financial analysis';
+    const p = document.createElement('p'); p.textContent = analysisText;
+    box.appendChild(h); box.appendChild(p);
+  }
+  const insightsText = typeof insights === 'string' ? insights : insights.text;
+  if (insightsText) {
+    const h = document.createElement('h4'); h.textContent = 'Financial insights';
+    const p = document.createElement('p'); p.textContent = insightsText;
+    box.appendChild(h); box.appendChild(p);
+  }
+}
+
+function clearWorkbookInsights(){
+  const el = document.querySelector('#workbook_insights, .workbook-insights, [data-role="workbook-insights"]');
+  if (el) el.remove();
 }
 
 // NEW: render workbook insights (cards + simple tables)

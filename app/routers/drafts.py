@@ -8,6 +8,7 @@ from app.services.insights import (
     DEFAULT_BASKET,
 )
 from app.gpt_client import summarize_financials
+from app.services.llm import llm_financial_summary
 
 router = APIRouter()
 
@@ -38,23 +39,34 @@ async def from_file(file: UploadFile = File(...)):
         ps_full = parsed.get("procurement_summary") or {}
         ps = ps_full.get("items") or []
         if ps:
-            analysis = (
-                parsed.get("analysis")
-                or parsed.get("economic_analysis")
-                or compute_procurement_insights(ps, basket=DEFAULT_BASKET)
-            )
-            insights = parsed.get("insights") or analysis
-            summary = summarize_procurement_lines(ps)
-            highs = summary.get("highlights") or []
-            if highs and isinstance(insights, dict):
-                insights = {**insights, "highlights": highs}
-            summary_text = summarize_financials(summary, insights if isinstance(insights, dict) else {})
+            # Build compact payload for LLM
+            totals = {
+                "grand_total": parsed.get("grand_total_sar") or ps_full.get("grand_total_sar"),
+                "vat_amount": parsed.get("vat_amount_sar") or ps_full.get("vat_amount_sar"),
+                "subtotal": parsed.get("subtotal_sar") or ps_full.get("subtotal_sar"),
+                "line_count": len(ps),
+                "vendor_count": len({(r.get("vendor_name") or "").strip() for r in ps if r.get("vendor_name")}),
+            }
+            vendors = []
+            try:
+                vendors = compute_procurement_insights(ps, basket=DEFAULT_BASKET).get("totals_per_vendor", [])
+            except Exception:
+                vendors = []
+
+            llm_out = llm_financial_summary({
+                "lines": ps,
+                "vendors": vendors,
+                "totals": totals,
+                "raw_text": parsed.get("raw_text", ""),
+            })
+
+            # Also keep machine summary objects if callers need them, but UI prints text only
             return {
                 "kind": "insights",
-                "summary": summary,
-                "analysis": analysis,
-                "insights": insights,
-                "summary_text": summary_text,
+                "summary": {"totals": totals, "vendors": vendors},
+                "analysis": {"text": llm_out.get("analysis_text", "")},
+                "insights": {"text": llm_out.get("insights_text", "")},
+                "summary_text": llm_out.get("summary_text", ""),
             }
 
         return {
