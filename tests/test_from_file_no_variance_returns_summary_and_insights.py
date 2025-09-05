@@ -11,6 +11,7 @@ def test_from_file_no_variance():
     j = r.json()
     assert j["kind"] == "insights"
     assert "summary" in j and "analysis" in j and "insights" in j
+    assert isinstance(j.get("summary_text"), str)
     assert "items" not in j["summary"]
     assert "economic_analysis" in j  # backwards compatibility
     assert "message" in j

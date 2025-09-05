@@ -9,3 +9,4 @@ def test_pdf_produces_summary_and_insights():
     assert len(res.get('items', [])) > 0
     assert isinstance(res.get('analysis'), dict)
     assert isinstance(res.get('insights'), dict)
+    assert isinstance(res.get('summary_text'), str)
