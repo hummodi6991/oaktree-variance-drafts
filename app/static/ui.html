@@ -431,9 +431,37 @@
     });
 
     if (insights && (insights.totals_per_vendor || insights.top_lines_by_amount)) {
-      const pre = document.createElement('pre');
-      pre.textContent = JSON.stringify(insights, null, 2);
-      root.appendChild(pre);
+      const totals = Array.isArray(insights.totals_per_vendor) ? insights.totals_per_vendor : [];
+      const grand = totals.reduce((s, r) => s + Number(r.total_sar || r.total_amount_sar || r.total || 0), 0);
+      const summary = document.createElement('div');
+      summary.className = 'card';
+      summary.innerHTML = `
+        <div class="card-title">Summary</div>
+        <div class="kv">Vendors: ${totals.length}</div>
+        <div class="kv">Total spend (SAR): ${grand.toFixed(2)}</div>`;
+      root.appendChild(summary);
+
+      function appendTable(title, rows, cols) {
+        if (!rows || !rows.length) return;
+        const div = document.createElement('div');
+        div.className = 'card';
+        const th = cols.map(c => `<th>${escapeHtml(c)}</th>`).join('');
+        const trs = rows.map(r => `<tr>${cols.map(c => `<td>${escapeHtml(String(r[c] ?? ''))}</td>`).join('')}</tr>`).join('');
+        div.innerHTML = `<div class="card-title">${escapeHtml(title)}</div><table class="simple"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+        root.appendChild(div);
+      }
+
+      appendTable('Totals per vendor', totals, ['vendor','total_sar']);
+
+      const top = Array.isArray(insights.top_lines_by_amount)
+        ? insights.top_lines_by_amount.map(r => ({
+            item_code: r.item_code || '',
+            description: r.description || '',
+            vendor: r.vendor_name || r.vendor || '',
+            amount_sar: r.amount_sar
+          }))
+        : [];
+      appendTable('Top lines by amount', top, ['item_code','description','vendor','amount_sar']);
     }
   }
 
