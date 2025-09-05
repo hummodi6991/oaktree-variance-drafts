@@ -256,13 +256,35 @@ def _vendor_totals_from_sheet(df: pd.DataFrame) -> List[Dict[str, Any]]:
     df = _detect_table(df.copy())
     low = _lower_map(df.columns)
     c_vendor = _pick(low, VENDOR_KEYS) or next(iter(low.values()))
-    c_total  = _pick(low, {"grand_total_sar","total_sar","amount_sar","total","الإجمالي"})
+    c_total = _pick(low, {"grand_total_sar", "total_sar", "amount_sar", "total", "الإجمالي"})
     if not c_total:
         return []
-    out = df[[c_vendor, c_total]].copy()
-    out.columns = ["vendor_name","total_amount_sar"]
-    out["total_amount_sar"] = _coerce_num_series(out["total_amount_sar"])
-    out = out.dropna(subset=["vendor_name","total_amount_sar"])
+
+    # Optional subtotal and VAT columns if present
+    c_subtotal = _pick(low, {"subtotal", "sub_total", "subtotal_sar", "net", "net total", "net_total"})
+    c_vat = _pick(low, {"vat", "vat_sar", "vat (5%)", "tax", "tax_sar"})
+
+    cols: List[str] = [c_vendor]
+    if c_subtotal:
+        cols.append(c_subtotal)
+    if c_vat:
+        cols.append(c_vat)
+    cols.append(c_total)
+
+    out = df[cols].copy()
+
+    rename = {c_vendor: "vendor_name", c_total: "total_amount_sar"}
+    if c_subtotal:
+        rename[c_subtotal] = "subtotal_amount_sar"
+    if c_vat:
+        rename[c_vat] = "vat_amount_sar"
+    out.columns = [rename.get(c, c) for c in out.columns]
+
+    for col in ["total_amount_sar", "subtotal_amount_sar", "vat_amount_sar"]:
+        if col in out.columns:
+            out[col] = _coerce_num_series(out[col])
+
+    out = out.dropna(subset=["vendor_name", "total_amount_sar"])
     return out.sort_values("total_amount_sar", ascending=False).to_dict("records")
 
 def _find_sheet_by_hints(xls: pd.ExcelFile, hints: set[str]) -> Optional[str]:
