@@ -5,7 +5,16 @@ from pdfminer.high_level import extract_text
 import pdfplumber
 import re
 import io
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+
+from app.utils.diagnostics import DiagnosticContext
+
+try:
+    import pytesseract  # type: ignore
+    from pdf2image import convert_from_bytes  # type: ignore
+except Exception:  # pragma: no cover - optional
+    pytesseract = None  # type: ignore
+    convert_from_bytes = None  # type: ignore
 
 # Fallback: detect unlabeled "qty unit_price total" rows
 ROW_TRIPLET = re.compile(
@@ -55,20 +64,45 @@ def _num(s: str) -> float | None:
         return None
 
 
-def _extract_text_safe(pdf_bytes: bytes) -> str:
-    """Try pdfminer, fall back to pdfplumber on failure."""
+def _extract_text_safe(pdf_bytes: bytes, diag: Optional["DiagnosticContext"] = None) -> str:
+    """Try pdfminer, fall back to pdfplumber, then OCR on failure."""
     try:
-        return extract_text(io.BytesIO(pdf_bytes)) or ""
+        txt = extract_text(io.BytesIO(pdf_bytes)) or ""
+        if txt:
+            return txt
     except Exception:
+        pass
+
+    try:
+        buf = io.BytesIO(pdf_bytes)
+        all_text: list[str] = []
+        with pdfplumber.open(buf) as pdf:
+            for page in pdf.pages:
+                all_text.append(page.extract_text() or "")
+        txt = "\n".join(all_text)
+        if txt:
+            return txt
+    except Exception:
+        pass
+
+    # If still empty, attempt OCR (best effort)
+    if diag:
+        diag.step("ocr_attempt")
+    if pytesseract and convert_from_bytes:
         try:
-            buf = io.BytesIO(pdf_bytes)
-            all_text: list[str] = []
-            with pdfplumber.open(buf) as pdf:
-                for page in pdf.pages:
-                    all_text.append(page.extract_text() or "")
-            return "\n".join(all_text)
-        except Exception:
-            return ""
+            images = convert_from_bytes(pdf_bytes)
+            ocr_text: list[str] = []
+            for img in images:
+                ocr_text.append(pytesseract.image_to_string(img))
+            txt = "\n".join(ocr_text)
+            if diag:
+                diag.step("ocr_success", pages=len(images), chars=len(txt))
+            return txt
+        except Exception as e:  # pragma: no cover - env dependent
+            if diag:
+                diag.warn("ocr_failed", error=str(e))
+
+    return ""
 
 
 def _classify_page(txt: str) -> str:
@@ -89,14 +123,19 @@ def _norm_unit(txt: str | None) -> str | None:
     return UNIT_MAP.get(u, u)
 
 
-def parse_procurement_pdf(pdf_bytes: bytes) -> Dict[str, Any]:
+def parse_procurement_pdf(
+    pdf_bytes: bytes,
+    diag: Optional[DiagnosticContext] = None,
+    text: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Extract line items without inventing anything.
     Returns {"items":[{item_code, description, unit, qty, unit_price_sar, amount_sar, vendor_name, doc_date}], "meta":{...}}
     Missing fields stay None.
     """
     started = time.time()
-    text = _extract_text_safe(pdf_bytes)
+    if text is None:
+        text = _extract_text_safe(pdf_bytes, diag=diag)
 
     page_types: List[str] = []
     try:
