@@ -11,7 +11,5 @@ def test_pdf_no_variance():
     r = client.post("/drafts/from-file", files=files)
     assert r.status_code == 200
     j = r.json()
-    assert j["kind"] == "insights"
-    assert "summary" in j and "analysis" in j and "insights" in j
-    assert "items" not in j["summary"]
-    assert "message" in j and "budget-vs-actual" in j["message"].lower()
+    assert set(j.keys()) == {"summary", "analysis", "insights"}
+    assert all(isinstance(j[k], str) for k in j)

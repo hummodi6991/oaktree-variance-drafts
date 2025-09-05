@@ -1,6 +1,7 @@
 
 import os
-from typing import Tuple
+import json
+from typing import Tuple, Dict, Any
 
 from .schemas import VarianceItem, ConfigModel
 from .prompt_contract import (
@@ -63,3 +64,62 @@ def generate_draft(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str]:
         return text, ""
     except Exception:
         return _fallback_text(v, cfg)
+
+
+def summarize_financials(summary: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, str]:
+    """Summarize procurement data with optional AI, returning text fields.
+
+    The helper asks ChatGPT for three short sections: ``summary``,
+    ``analysis`` and ``insights``. When the API is unavailable we fall back
+    to deterministic text extracted from any available highlights.
+    """
+
+    highlights: list[str] = []
+    if isinstance(summary, dict):
+        highlights.extend(summary.get("highlights", []))
+    if isinstance(analysis, dict):
+        highlights.extend(analysis.get("highlights", []))
+
+    fallback = {
+        "summary": " ".join(highlights).strip() or "No summary available.",
+        "analysis": "No financial analysis available.",
+        "insights": "No financial insights available.",
+    }
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return fallback
+    try:
+        from openai import OpenAI
+
+        timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
+        retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
+        client = OpenAI(api_key=api_key, timeout=timeout, max_retries=retries)
+        prompt = (
+            "You are a financial analyst. Using the data below, respond with a JSON "
+            "object containing short strings for keys 'summary', 'analysis', and "
+            "'insights'.\n\n"
+            f"Highlights: {', '.join(highlights)}\n"
+            f"Analysis: {json.dumps(analysis, default=str)[:4000]}"
+        )
+        messages = [
+            {"role": "system", "content": "You are a helpful financial analysis assistant."},
+            {"role": "user", "content": prompt},
+        ]
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-5.1-mini"),
+            messages=messages,  # type: ignore[arg-type]
+            timeout=timeout,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        try:
+            data = json.loads(text)
+            return {
+                "summary": str(data.get("summary", fallback["summary"])),
+                "analysis": str(data.get("analysis", fallback["analysis"])),
+                "insights": str(data.get("insights", fallback["insights"])),
+            }
+        except Exception:
+            return fallback
+    except Exception:
+        return fallback

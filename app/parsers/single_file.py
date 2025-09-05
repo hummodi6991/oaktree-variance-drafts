@@ -10,6 +10,7 @@ from app.services.insights import (
     summarize_procurement_lines,
     DEFAULT_BASKET,
 )
+from app.gpt_client import summarize_financials
 
 RE_MONEY = re.compile(r"(?<![\d.])(?:SAR|SR|ر\.س)?\s*([0-9]{1,3}(?:[,0-9]{0,3})*(?:\.[0-9]{1,2})?)", re.I)
 RE_DATE  = re.compile(r"(20\d{2}[/-]\d{1,2}[/-]\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]20\d{2})")
@@ -202,13 +203,5 @@ async def analyze_single_file(
         )
     analysis = compute_procurement_insights(cards, basket=DEFAULT_BASKET)
     summary = summarize_procurement_lines(cards)
-    return {
-        "report_type": "procurement_summary",
-        "summary": summary,
-        "analysis": analysis,
-        "insights": analysis,
-        "source": name,
-        "vendor_name": vendor,
-        "doc_date": date,
-    }
+    return summarize_financials(summary, analysis)
 

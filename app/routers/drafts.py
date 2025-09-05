@@ -7,6 +7,7 @@ from app.services.insights import (
     summarize_procurement_lines,
     DEFAULT_BASKET,
 )
+from app.gpt_client import summarize_financials
 
 router = APIRouter()
 
@@ -48,19 +49,9 @@ async def from_file(file: UploadFile = File(...)):
             highs = summary.get("highlights") or []
             if highs and isinstance(insights, dict):
                 insights = {**insights, "highlights": highs}
-            return {
-                "kind": "insights",
-                "message": "No budget-vs-actual data detected. Showing summary and insights instead.",
-                "procurement_summary": {
-                    "items": ps,
-                    "meta": ps_full.get("meta", {}),
-                },
-                "summary": summary,
-                "analysis": analysis,
-                "economic_analysis": analysis,
-                "insights": insights,
-                "diagnostics": parsed.get("diagnostics", {}),
-            }
+            return summarize_financials(
+                summary, insights if isinstance(insights, dict) else {}
+            )
 
         return {
             "error": "We couldn’t find budget/actuals or recognizable procurement lines in this file.",
