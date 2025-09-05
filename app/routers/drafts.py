@@ -29,16 +29,22 @@ async def from_file(file: UploadFile = File(...)):
                 "diagnostics": parsed.get("diagnostics", {}),
             }
 
-        # Path B: No variance detected → show summary + economic analysis + insights
+        # Path B: No variance detected → show summary + analysis + insights
         ps = (parsed.get("procurement_summary") or {}).get("items") or []
         if ps:
-            analysis = compute_procurement_insights(ps)
+            analysis = (
+                parsed.get("analysis")
+                or parsed.get("economic_analysis")
+                or compute_procurement_insights(ps)
+            )
+            insights = parsed.get("insights") or analysis
             return {
                 "kind": "insights",
                 "message": "No budget-vs-actual data detected. Showing summary and insights instead.",
                 "summary": {"items": ps},
+                "analysis": analysis,
                 "economic_analysis": analysis,
-                "insights": analysis,
+                "insights": insights,
                 "diagnostics": parsed.get("diagnostics", {}),
             }
 

@@ -6,6 +6,7 @@ from app.utils.diagnostics import DiagnosticContext
 from .procurement_pdf import parse_procurement_pdf
 import re
 import pdfplumber
+from app.services.insights import compute_procurement_insights
 
 # Column synonym maps for tolerant CSV/Excel intake
 MAP = {
@@ -101,13 +102,28 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
       # Fallback: procurement summary extraction from existing PDF parser
       ps = parse_procurement_pdf(data)
       diag.step("parse_pdf_success", items=len(ps.get("items", [])))
-      return {"procurement_summary": ps, "diagnostics": diag.to_dict()}
+      analysis = compute_procurement_insights(ps.get("items", []))
+      return {
+        "procurement_summary": ps,
+        "analysis": analysis,
+        "economic_analysis": analysis,
+        "insights": analysis,
+        "diagnostics": diag.to_dict(),
+      }
     if name.endswith(".docx"):
       diag.step("parse_docx_start")
       doc = Document(io.BytesIO(data))
       text = "\n".join(p.text for p in doc.paragraphs)
       diag.step("parse_docx_success", paragraphs=len(doc.paragraphs))
-      return {"procurement_summary": {"items":[{"item_code": None, "description": text[:2000], "qty": None, "unit_price_sar": None, "amount_sar": None, "vendor_name": None, "doc_date": None, "source":"uploaded_file"}], "meta":{}}, "diagnostics": diag.to_dict()}
+      ps = {"items":[{"item_code": None, "description": text[:2000], "qty": None, "unit_price_sar": None, "amount_sar": None, "vendor_name": None, "doc_date": None, "source":"uploaded_file"}], "meta":{}}
+      analysis = compute_procurement_insights(ps.get("items", []))
+      return {
+        "procurement_summary": ps,
+        "analysis": analysis,
+        "economic_analysis": analysis,
+        "insights": analysis,
+        "diagnostics": diag.to_dict(),
+      }
     if name.endswith(".csv"):
       diag.step("parse_csv_start")
       try:
@@ -141,7 +157,15 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
       diag.step("parse_text_start")
       text = data.decode("utf-8", errors="ignore")
       diag.step("parse_text_success", chars=len(text))
-      return {"procurement_summary": {"items":[{"item_code": None, "description": text[:2000], "qty": None, "unit_price_sar": None, "amount_sar": None, "vendor_name": None, "doc_date": None, "source":"uploaded_file"}], "meta":{}}, "diagnostics": diag.to_dict()}
+      ps = {"items":[{"item_code": None, "description": text[:2000], "qty": None, "unit_price_sar": None, "amount_sar": None, "vendor_name": None, "doc_date": None, "source":"uploaded_file"}], "meta":{}}
+      analysis = compute_procurement_insights(ps.get("items", []))
+      return {
+        "procurement_summary": ps,
+        "analysis": analysis,
+        "economic_analysis": analysis,
+        "insights": analysis,
+        "diagnostics": diag.to_dict(),
+      }
 
     df = _map_cols(df)
     diag.step("columns_mapped", columns=list(df.columns))
@@ -155,4 +179,11 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
       for _, r in df.head(50).iterrows():
         desc = " ".join(str(v) for v in r.to_dict().values() if pd.notna(v))[:2000]
         items.append({"item_code": None, "description": desc, "qty": None, "unit_price_sar": None, "amount_sar": None, "vendor_name": None, "doc_date": None, "source":"uploaded_file"})
-      return {"procurement_summary": {"items": items, "meta": {}}, "diagnostics": diag.to_dict()}
+      analysis = compute_procurement_insights(items)
+      return {
+        "procurement_summary": {"items": items, "meta": {}},
+        "analysis": analysis,
+        "economic_analysis": analysis,
+        "insights": analysis,
+        "diagnostics": diag.to_dict(),
+      }

@@ -10,6 +10,7 @@ def test_from_file_no_variance():
     assert r.status_code == 200
     j = r.json()
     assert j["kind"] == "insights"
-    assert "summary" in j and "economic_analysis" in j and "insights" in j
+    assert "summary" in j and "analysis" in j and "insights" in j
+    assert "economic_analysis" in j  # backwards compatibility
     assert "message" in j
     assert "budget-vs-actual" in j["message"].lower()
