@@ -55,10 +55,17 @@ def _build_report_markdown_for_quote_compare(payload: Dict[str, Any], filename: 
 
     # Normalize vendor_totals row shape
     vt_rows = []
+    vendor_stats = []  # (vendor, total, subtotal, vat)
     for r in vendor_totals:
         vendor = r.get("vendor") or r.get("vendor_name") or r.get("name") or "Vendor"
         total = r.get("total_amount_sar") or r.get("total_sar") or r.get("total") or r.get("amount_sar")
+        sub = r.get("subtotal_amount_sar") or r.get("subtotal_sar") or r.get("subtotal")
+        vat = r.get("vat_amount_sar") or r.get("vat_sar") or r.get("vat")
         vt_rows.append([str(vendor), _fmt_currency(total)])
+        try:
+            vendor_stats.append((str(vendor), float(total) if total is not None else None, sub, vat))
+        except Exception:
+            vendor_stats.append((str(vendor), None, sub, vat))
 
     # Normalize spread rows
     sp_rows = []
@@ -88,6 +95,26 @@ def _build_report_markdown_for_quote_compare(payload: Dict[str, Any], filename: 
     if total_spend is not None:
         bullets.append(f"**Total quoted spend:** {_fmt_currency(total_spend)}")
     bullets.append(f"**Vendors compared:** {n_vendors or '—'}")
+
+    # Cost comparison
+    stats = [vs for vs in vendor_stats if vs[1] is not None]
+    if stats:
+        lowest = min(stats, key=lambda t: t[1])
+        highest = max(stats, key=lambda t: t[1])
+        diff = highest[1] - lowest[1]
+        bullets.append(
+            f"**Lowest total quote:** {lowest[0]} ({_fmt_currency(lowest[1])})"
+        )
+        bullets.append(
+            f"**Highest total quote:** {highest[0]} ({_fmt_currency(highest[1])})"
+        )
+        bullets.append(
+            f"**Difference:** {_fmt_currency(diff)} between highest and lowest bids"
+        )
+        bullets.append(
+            f"**Recommendation:** {lowest[0]} offers the lowest total; verify quality and scope before awarding"
+        )
+
     if spreads:
         bullets.append("**Price dispersion detected** across vendors (see table below).")
     bullets.extend(f"- {h}" for h in highlights[:5])
@@ -96,15 +123,33 @@ def _build_report_markdown_for_quote_compare(payload: Dict[str, Any], filename: 
     md.append(f"### Single-File Summary — {filename}")
     md.append("")
     if bullets:
+        md.append("#### Overview")
         md.append("\n".join(f"- {b}" if not b.startswith("- ") else b for b in bullets))
         md.append("")
+
+    # Vendor summaries with optional subtotal/VAT
+    vendor_lines = []
+    for v, tot, sub, vat in vendor_stats:
+        parts = []
+        if sub is not None:
+            parts.append(f"Subtotal {_fmt_currency(sub)}")
+        if vat is not None:
+            parts.append(f"VAT {_fmt_currency(vat)}")
+        parts.append(f"Total {_fmt_currency(tot)}")
+        vendor_lines.append(f"{v}: "+", ".join(parts))
+
+    if vendor_lines:
+        md.append("#### Vendor summaries")
+        md.append("\n".join(f"- {line}" for line in vendor_lines))
+        md.append("")
+
     if vt_rows:
         md.append("#### Totals by vendor")
-        md.append(_md_table(["Vendor","Total"], vt_rows))
+        md.append(_md_table(["Vendor", "Total"], vt_rows))
         md.append("")
     if sp_rows:
         md.append("#### Top unit price spreads")
-        md.append(_md_table(["Item","Min Unit","Max Unit","Spread","Spread %"], sp_rows))
+        md.append(_md_table(["Item", "Min Unit", "Max Unit", "Spread", "Spread %"], sp_rows))
         md.append("")
     return "\n".join(md).strip()
 
