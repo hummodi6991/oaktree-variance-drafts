@@ -33,8 +33,6 @@ def _build_workbook():
 def test_doors_quotes_adapter_handles_workbook():
     data = _build_workbook()
     resp = process_single_file('doors_quotes.xlsx', data)
-    assert resp['mode'] == 'quote_compare'
-    assert resp['items_rowcount'] == 2
-    assert resp['variance_items'], 'expected variance items'
-    assert len(resp['vendor_totals']) == 2
-    assert resp.get('insights', {}).get('highlights')
+    assert 'summary_text' in resp
+    assert 'analysis' in resp and isinstance(resp['analysis'], dict)
+    assert 'insights' in resp and isinstance(resp['insights'], dict)

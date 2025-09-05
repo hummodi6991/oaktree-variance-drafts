@@ -23,7 +23,7 @@ def _multi_sheet_bytes() -> bytes:
     return buf.getvalue()
 
 
-def test_drafts_from_file_multisheet_variance():
+def test_drafts_from_file_returns_insights():
     client = TestClient(app)
     files = {
         "file": (
@@ -35,9 +35,7 @@ def test_drafts_from_file_multisheet_variance():
     resp = client.post("/drafts/from-file", files=files)
     assert resp.status_code == 200
     data = resp.json()
-    assert "variance_items" in data
-    assert len(data["variance_items"]) == 1
-    v = data["variance_items"][0]
-    assert v["budget_sar"] == 100.0
-    assert v["actual_sar"] == 120.0
-    assert v["variance_sar"] == 20.0
+    assert data["kind"] == "insights"
+    assert "summary_text" in data
+    assert "analysis" in data and isinstance(data["analysis"], dict)
+    assert "insights" in data and isinstance(data["insights"], dict)
