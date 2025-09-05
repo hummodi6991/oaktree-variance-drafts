@@ -44,6 +44,9 @@ async def from_file(file: UploadFile = File(...)):
             )
             insights = parsed.get("insights") or analysis
             summary = summarize_procurement_lines(ps)
+            highs = summary.get("highlights") or []
+            if highs and isinstance(insights, dict):
+                insights = {**insights, "highlights": highs}
             return {
                 "kind": "insights",
                 "message": "No budget-vs-actual data detected. Showing summary and insights instead.",

@@ -376,8 +376,14 @@
     setStatus('Calling model…');
     try {
       const res = await fetch('/drafts/from-file', { method:'POST', body: fd });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const txt = await res.text();
+      let data = {};
+      try { data = JSON.parse(txt); } catch (_) {}
+      if (!res.ok || (data && data.error)) {
+        setStatus((data && data.error) ? data.error : `Request failed (HTTP ${res.status})`);
+        if (data && data.diagnostics) { renderDiagnostics(data.diagnostics); }
+        return;
+      }
       clearReport();
 
       if (data.variance_items && data.variance_items.length) {
@@ -405,7 +411,7 @@
 
       setStatus('No budget-vs-actual data detected.');
     } catch (e) {
-      setStatus('Load failed');
+      setStatus(`Load failed: ${e.message || e.toString()}`);
       showError(e.message || e.toString());
     }
   }
