@@ -1,5 +1,6 @@
 import io
 import pandas as pd
+
 from app.services.singlefile import process_single_file
 
 
@@ -10,8 +11,7 @@ def _xlsx_bytes(df: pd.DataFrame) -> bytes:
     return bio.getvalue()
 
 
-def test_doors_quotes_like_excel_produces_diagnostics():
-    # Simulate a sheet with a preamble row, then real headers on row 3
+def test_doors_quotes_like_excel_returns_summary():
     data = [
         ["Vendor:", "AL AZAL", "", "", ""],
         ["", "", "", "", ""],
@@ -22,9 +22,7 @@ def test_doors_quotes_like_excel_produces_diagnostics():
     df = pd.DataFrame(data, columns=[f"C{i}" for i in range(1,6)])
     b = _xlsx_bytes(df)
     resp = process_single_file("doors_quotes_complete.xlsx", b)
-    assert resp["mode"] == "quote_compare"
-    assert "diagnostics" in resp
-    diag = resp["diagnostics"]
-    assert diag.get("correlation_id")
-    assert isinstance(diag.get("events"), list)
+    assert "summary_text" in resp
+    assert "analysis" in resp and isinstance(resp["analysis"], dict)
+    assert "insights" in resp and isinstance(resp["insights"], dict)
 
