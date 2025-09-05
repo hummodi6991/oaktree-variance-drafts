@@ -223,14 +223,23 @@ def generate_insights_for_workbook(sheets: Dict[str, pd.DataFrame]) -> Dict[str,
     }
 
 
-def compute_procurement_insights(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+DEFAULT_BASKET: Dict[str, int] = {"D01": 9, "D02": 18, "D03": 27, "D04": 12}
+
+
+def compute_procurement_insights(
+    items: List[Dict[str, Any]],
+    basket: Optional[Dict[str, int]] = None,
+    vat_rate: float = 0.15,
+) -> Dict[str, Any]:
     """Simple rollups for procurement line items.
 
     Returns totals per vendor and top lines by amount to help the UI render
     basic summaries when no budget/actual variance is present.
+    If ``basket`` is provided, compute per-vendor pricing for the requested quantities.
     """
     vendor_totals: Dict[str, float] = defaultdict(float)
     top_lines: List[Dict[str, Any]] = []
+    basket_totals: Dict[str, float] = defaultdict(float)
 
     for it in items:
         amt = it.get("amount_sar")
@@ -238,19 +247,63 @@ def compute_procurement_insights(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             amt = float(amt) if amt is not None else None
         except Exception:
             amt = None
+        vendor = it.get("vendor_name") or it.get("vendor")
+        if amt is not None and vendor:
+            vendor_totals[str(vendor)] += amt
         if amt is not None:
             top_lines.append({**it, "amount_sar": amt})
-            ven = it.get("vendor_name") or it.get("vendor")
-            if ven:
-                vendor_totals[str(ven)] += amt
+        if basket and vendor and it.get("item_code") in basket and it.get("unit_price_sar") is not None:
+            try:
+                unit_p = float(it.get("unit_price_sar"))
+                qty_req = float(basket[it["item_code"]])
+                basket_totals[str(vendor)] += unit_p * qty_req
+            except Exception:
+                pass
 
     top_lines = sorted(top_lines, key=lambda r: r.get("amount_sar", 0), reverse=True)[:10]
     vendor_totals_sorted = sorted(vendor_totals.items(), key=lambda kv: kv[1], reverse=True)
 
-    return {
+    analysis: Dict[str, Any] = {
         "totals_per_vendor": [{"vendor": v, "total_sar": round(t, 2)} for v, t in vendor_totals_sorted],
         "top_lines_by_amount": top_lines,
     }
+
+    if basket_totals:
+        basket_rows = []
+        for v, net in basket_totals.items():
+            vat = net * vat_rate
+            basket_rows.append({
+                "vendor": v,
+                "net_amount_sar": round(net, 2),
+                "vat_amount_sar": round(vat, 2),
+                "tco_sar": round(net + vat, 2),
+            })
+        analysis["vendor_basket_totals"] = basket_rows
+
+        # Line-level best unit prices
+        df = pd.DataFrame(items)
+        df = df.dropna(subset=["item_code", "vendor_name", "unit_price_sar"])
+        if not df.empty:
+            bench: List[Dict[str, Any]] = []
+            for code, grp in df.groupby("item_code"):
+                try:
+                    min_u = float(grp["unit_price_sar"].min())
+                    max_u = float(grp["unit_price_sar"].max())
+                    spread = max_u - min_u
+                    spread_pct = (spread / min_u * 100.0) if min_u > 0 else None
+                    bench.append({
+                        "item_code": code,
+                        "min_unit_price_sar": round(min_u, 2),
+                        "max_unit_price_sar": round(max_u, 2),
+                        "unit_price_spread_sar": round(spread, 2),
+                        "unit_price_spread_pct": round(spread_pct, 2) if spread_pct is not None else None,
+                    })
+                except Exception:
+                    continue
+            if bench:
+                analysis["line_benchmarks"] = bench
+
+    return analysis
 
 
 # --- Variance insights for Budget vs Actual ---
