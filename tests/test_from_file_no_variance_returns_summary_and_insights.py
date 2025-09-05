@@ -9,6 +9,5 @@ def test_from_file_no_variance():
     r = client.post("/drafts/from-file", files=files)
     assert r.status_code == 200
     j = r.json()
-    assert j["kind"] in ("procurement", "insights")
-    if j["kind"] == "procurement":
-        assert "procurement_summary" in j and "insights" in j
+    assert j["kind"] == "insights"
+    assert "summary" in j and "economic_analysis" in j and "insights" in j
