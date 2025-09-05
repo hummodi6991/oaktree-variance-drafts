@@ -11,3 +11,5 @@ def test_from_file_no_variance():
     j = r.json()
     assert j["kind"] == "insights"
     assert "summary" in j and "economic_analysis" in j and "insights" in j
+    assert "message" in j
+    assert "budget-vs-actual" in j["message"].lower()

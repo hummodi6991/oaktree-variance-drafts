@@ -35,6 +35,7 @@ async def from_file(file: UploadFile = File(...)):
             analysis = compute_procurement_insights(ps)
             return {
                 "kind": "insights",
+                "message": "No budget-vs-actual data detected. Showing summary and insights instead.",
                 "summary": {"items": ps},
                 "economic_analysis": analysis,
                 "insights": analysis,
