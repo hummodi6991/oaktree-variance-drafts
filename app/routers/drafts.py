@@ -1,7 +1,11 @@
 from fastapi import APIRouter, UploadFile, File
 import asyncio
 from app.parsers.single_file_intake import parse_single_file
-from app.services.insights import compute_procurement_insights, compute_variance_insights
+from app.services.insights import (
+    compute_procurement_insights,
+    compute_variance_insights,
+    DEFAULT_BASKET,
+)
 
 router = APIRouter()
 
@@ -35,7 +39,7 @@ async def from_file(file: UploadFile = File(...)):
             analysis = (
                 parsed.get("analysis")
                 or parsed.get("economic_analysis")
-                or compute_procurement_insights(ps)
+                or compute_procurement_insights(ps, basket=DEFAULT_BASKET)
             )
             insights = parsed.get("insights") or analysis
             return {
