@@ -7,6 +7,7 @@ from app.services.insights import (
     summarize_procurement_lines,
     DEFAULT_BASKET,
 )
+from app.gpt_client import summarize_financials
 
 router = APIRouter()
 
@@ -48,6 +49,7 @@ async def from_file(file: UploadFile = File(...)):
             highs = summary.get("highlights") or []
             if highs and isinstance(insights, dict):
                 insights = {**insights, "highlights": highs}
+            summary_text = summarize_financials(summary, insights if isinstance(insights, dict) else {})
             return {
                 "kind": "insights",
                 "message": "No budget-vs-actual data detected. Showing summary and insights instead.",
@@ -59,6 +61,7 @@ async def from_file(file: UploadFile = File(...)):
                 "analysis": analysis,
                 "economic_analysis": analysis,
                 "insights": insights,
+                "summary_text": summary_text,
                 "diagnostics": parsed.get("diagnostics", {}),
             }
 

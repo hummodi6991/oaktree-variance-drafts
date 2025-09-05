@@ -16,6 +16,7 @@ from app.services.insights import (
     compute_variance_insights,
     summarize_procurement_lines,
 )
+from app.gpt_client import summarize_financials
 from app.parsers.single_file_intake import parse_single_file
 
 
@@ -269,6 +270,7 @@ def process_single_file(
         highs = summary.get("highlights") or []
         if highs and isinstance(insights, dict):
             insights = {**insights, "highlights": highs}
+        summary_text = summarize_financials(summary, insights if isinstance(insights, dict) else {})
         md: List[str] = [f"### Single-File Summary — {filename}", ""]
         if highs:
             md.append("#### Highlights")
@@ -281,6 +283,7 @@ def process_single_file(
             "economic_analysis": analysis,
             "summary": summary,
             "insights": insights,
+            "summary_text": summary_text,
             "report_markdown": "\n".join(md).strip(),
             "diagnostics": parsed.get("diagnostics", {}),
         }
