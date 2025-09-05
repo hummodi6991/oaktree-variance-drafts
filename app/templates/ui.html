@@ -97,9 +97,17 @@
 
       <div class="row" style="margin-bottom:8px">
         <button id="btnGen" class="btn">Generate</button>
-        <div id="status" class="status">Idle</div>
+      <div id="status" class="status">Idle</div>
       </div>
       <div class="bar"><div id="bar" style="width:0%"></div></div>
+      <details id="error-details" style="display:none;margin-top:8px;">
+        <summary>Error details</summary>
+        <pre id="error-stack"></pre>
+      </details>
+      <details id="diag-details" style="display:none;margin-top:8px;">
+        <summary>Diagnostics</summary>
+        <pre id="diag-text"></pre>
+      </details>
     </div>
 
     <div class="card">
@@ -119,8 +127,52 @@
 <script>
   // ---------- Helpers ----------
   const $ = id => document.getElementById(id);
-  const setStatus = (msg, cls='') => { const s=$('status'); s.textContent=msg; s.className='status ' + cls; };
+  const showErrorDetails = err => {
+    const det = $('error-details');
+    const pre = $('error-stack');
+    if (!det || !pre) return;
+    if (!err) {
+      det.style.display = 'none';
+      pre.textContent = '';
+      return;
+    }
+    det.style.display = 'block';
+    det.open = true;
+    const msg = err && err.stack ? err.stack :
+      (typeof err === 'string' ? err : JSON.stringify(err, null, 2));
+    pre.textContent = msg;
+  };
+  const clearErrorDetails = () => showErrorDetails(null);
+  const renderDiagnostics = diag => {
+    const det = $('diag-details');
+    const pre = $('diag-text');
+    if (!det || !pre) return;
+    if (!diag) {
+      det.style.display = 'none';
+      pre.textContent = '';
+      return;
+    }
+    det.style.display = 'block';
+    det.open = true;
+    pre.textContent = typeof diag === 'string' ? diag : JSON.stringify(diag, null, 2);
+  };
+  const setStatus = (msg, cls='') => {
+    const s = $('status');
+    s.textContent = msg;
+    s.className = 'status ' + cls;
+    if (cls !== 'err') { clearErrorDetails(); renderDiagnostics(null); }
+  };
   const setBar = pct => { $('bar').style.width = Math.max(0, Math.min(100, pct)) + '%'; };
+  window.addEventListener('error', e => {
+    setStatus(e.message || 'Error', 'err');
+    showErrorDetails(e.error || e.message || e);
+  });
+  window.addEventListener('unhandledrejection', e => {
+    const reason = e.reason;
+    const msg = reason && reason.message ? reason.message : String(reason);
+    setStatus(msg, 'err');
+    showErrorDetails(reason);
+  });
 
   function normalizeKeys(row) {
     const out = {};
@@ -346,18 +398,26 @@
       if (!resp.ok) {
         const txt = await resp.text();
         setStatus('API error: ' + resp.status + ' ' + resp.statusText + '\n' + txt, 'err');
+        showErrorDetails(txt);
+        let parsed;
+        try { parsed = JSON.parse(txt); } catch (_) {}
+        renderDiagnostics(parsed && parsed.diagnostics ? parsed.diagnostics : parsed);
         setBar(0); $('btnSingle').disabled = false; return;
       }
       const result = await resp.json();
       if (result && result.error) {
         setStatus(result.error, 'err'); setBar(0); $('btnSingle').disabled = false;
         $('result').textContent = result.error;
+        showErrorDetails(result);
+        renderDiagnostics(result.diagnostics);
         return;
       }
       setStatus('Done', 'ok'); setBar(100);
       renderFromFileResult(result);
+      if (result.diagnostics) renderDiagnostics(result.diagnostics);
     } catch (err) {
       setStatus(String(err && err.message ? err.message : err), 'err'); setBar(0);
+      showErrorDetails(err);
     } finally {
       $('btnSingle').disabled = false; setTimeout(() => setBar(0), 1200);
     }
@@ -437,15 +497,21 @@
       if (!resp.ok) {
         const txt = await resp.text();
         setStatus('API error: ' + resp.status + ' ' + resp.statusText + '\n' + txt, 'err');
+        showErrorDetails(txt);
+        let parsed;
+        try { parsed = JSON.parse(txt); } catch (_) {}
+        renderDiagnostics(parsed && parsed.diagnostics ? parsed.diagnostics : parsed);
         setBar(0); $('btnGen').disabled=false; return;
       }
 
       const data = await resp.json();
       setStatus('Done', 'ok'); setBar(100);
       renderResult(data);
+      if (data.diagnostics) renderDiagnostics(data.diagnostics);
     } catch (err) {
       setStatus(String(err && err.message ? err.message : err), 'err');
       setBar(0);
+      showErrorDetails(err);
     } finally {
       $('btnGen').disabled = false;
       setTimeout(() => setBar(0), 1200);
