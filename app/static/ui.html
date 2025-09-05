@@ -380,16 +380,29 @@
       const data = await res.json();
       clearReport();
 
-      if (data.procurement_summary && data.procurement_summary.items && data.procurement_summary.items.length) {
-        renderProcurementSummary(data.procurement_summary);
-        setStatus('Done');
-        return;
-      }
       if (data.variance_items && data.variance_items.length) {
         renderVarianceList(data.variance_items);
         setStatus('Done');
         return;
       }
+
+      const ps = (data.procurement_summary && data.procurement_summary.items && data.procurement_summary.items.length)
+        ? { items: data.procurement_summary.items, insights: data.insights || data.economic_analysis || {} }
+        : (data.summary && data.summary.items && data.summary.items.length)
+          ? { items: data.summary.items, insights: data.insights || data.economic_analysis || {} }
+          : null;
+      if (ps) {
+        renderProcurementSummary(ps);
+        setStatus('Done');
+        return;
+      }
+
+      if (data.insights) {
+        renderInsights(data.insights);
+        setStatus('Done');
+        return;
+      }
+
       setStatus('No variance items found.');
     } catch (e) {
       setStatus('Load failed');
@@ -397,9 +410,9 @@
     }
   }
 
-  function renderProcurementSummary(ps) {
+  function renderProcurementSummary({ items, insights }) {
     const root = ensureSection('report-root', 'Procurement Summary');
-    ps.items.forEach((it, idx) => {
+    items.forEach((it, idx) => {
       const card = document.createElement('div');
       card.className = 'card';
       card.innerHTML = `
@@ -416,6 +429,38 @@
       `;
       root.appendChild(card);
     });
+
+    if (insights && (insights.totals_per_vendor || insights.top_lines_by_amount)) {
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(insights, null, 2);
+      root.appendChild(pre);
+    }
+  }
+
+  function renderInsights(ins) {
+    const root = ensureSection('report-root', 'Workbook Insights');
+    const highlights = (ins && ins.highlights && ins.highlights.length)
+      ? ('<ul>' + ins.highlights.map(x => `<li>${escapeHtml(x)}</li>`).join('') + '</ul>')
+      : '<p class="muted">No highlights available.</p>';
+    const cards = (ins && ins.cards)
+      ? ins.cards.map(c => `<div class="kv"><b>${escapeHtml(c.title || c.sheet || 'Metric')}</b>: ${escapeHtml(String(c.value_sar ?? c.value ?? '—'))}</div>`).join('')
+      : '';
+    const box = document.createElement('div');
+    box.className = 'card';
+    box.innerHTML = `<div class="card-title">Workbook Insights</div>${highlights}${cards}`;
+    root.appendChild(box);
+
+    function appendTable(title, rows, cols) {
+      if (!rows || !rows.length) return;
+      const div = document.createElement('div');
+      div.className = 'card';
+      const th = cols.map(c => `<th>${escapeHtml(c)}</th>`).join('');
+      const trs = rows.slice(0, 20).map(r => `<tr>${cols.map(c => `<td>${escapeHtml(String(r[c] ?? ''))}</td>`).join('')}</tr>`).join('');
+      div.innerHTML = `<div class="card-title">${escapeHtml(title)}</div><table class="simple"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+      root.appendChild(div);
+    }
+    appendTable('Top vendors by spend', (ins.tables && ins.tables['workbook::vendor_totals']) || [], ['vendor','total_sar']);
+    appendTable('Largest bid spreads', (ins.tables && ins.tables['workbook::vendor_spreads']) || [], ['description','min_vendor','min_unit_sar','max_vendor','max_unit_sar','spread_pct']);
   }
 </script>
 
