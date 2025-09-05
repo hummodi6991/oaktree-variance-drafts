@@ -30,7 +30,7 @@ async function generateFromSingleFile() {
     renderVarianceDraftCards(variance);
   } else if (hasProcurement || (data && (data.kind === "insights" || data.mode === "insights"))) {
     // Text-only: summary, analysis, insights (number-supported). No cards/tables/diagnostics.
-    clearWorkbookInsights();
+    hardRemoveWorkbookInsights();
     renderSummaryAnalysisInsightsOnly({
       summary: data.summary || {},
       analysis: (data.analysis && (data.analysis.text || data.analysis)) || data.economic_analysis || {},
@@ -49,65 +49,25 @@ function renderSummaryAnalysisInsightsOnly(payload) {
   box.innerHTML = '';
   const { summary_text, analysis = {}, insights = {} } = payload || {};
 
-  if (summary_text) {
-    const p = document.createElement('p');
-    p.textContent = summary_text;
-    box.appendChild(p);
-  }
-
-  // --- Minimal numeric bullets (supported by extracted numbers)
-  const ins = (insights && typeof insights === 'object') ? insights : {};
-  const totalsPerVendor = Array.isArray(ins.totals_per_vendor) ? ins.totals_per_vendor
-                        : Array.isArray(analysis.totals_per_vendor) ? analysis.totals_per_vendor
-                        : (payload.summary && payload.summary.vendors) || [];
-  const totals = (payload.summary && payload.summary.totals) || {};
-  const top = Array.isArray(ins.top_lines_by_amount) ? ins.top_lines_by_amount
-             : Array.isArray(analysis.top_lines_by_amount) ? analysis.top_lines_by_amount
-             : [];
-
-  const ul = document.createElement('ul');
-  // Grand total
-  if (totals && (totals.grand_total || totals.subtotal)) {
-    const grand = Number(totals.grand_total || 0);
-    const li = document.createElement('li');
-    li.textContent = `Total (SAR): ${grand ? grand.toFixed(2) : Number(totals.subtotal || 0).toFixed(2)}`;
-    ul.appendChild(li);
-  }
-  // Top 3 lines by amount
-  top.slice(0, 3).forEach((r, i) => {
-    const li = document.createElement('li');
-    const label = r.description || r.item_code || 'Line';
-    const val = (r.amount_sar ?? r.total_sar ?? r.value ?? '—');
-    li.textContent = `Top ${i + 1}: ${label} — SAR ${val}`;
-    ul.appendChild(li);
-  });
-  // Vendor totals (compact)
-  if (totalsPerVendor && totalsPerVendor.length) {
-    const li = document.createElement('li');
-    const sum = totalsPerVendor.reduce((s,r)=> s + Number(r.total_sar || r.total || 0), 0);
-    li.textContent = `Vendors: ${totalsPerVendor.length} | Sum by vendor: SAR ${sum.toFixed(2)}`;
-    ul.appendChild(li);
-  }
-  if (ul.childNodes.length) box.appendChild(ul);
-
-  // Optional: show separate "Financial analysis" and "Financial insights" blocks if provided as text
-  const analysisText = typeof analysis === 'string' ? analysis : analysis.text;
-  if (analysisText) {
-    const h = document.createElement('h4'); h.textContent = 'Financial analysis';
-    const p = document.createElement('p'); p.textContent = analysisText;
-    box.appendChild(h); box.appendChild(p);
-  }
-  const insightsText = typeof insights === 'string' ? insights : insights.text;
-  if (insightsText) {
-    const h = document.createElement('h4'); h.textContent = 'Financial insights';
-    const p = document.createElement('p'); p.textContent = insightsText;
-    box.appendChild(h); box.appendChild(p);
-  }
+  // Render EXACTLY three text blocks (nothing else)
+  const analysisText = typeof analysis === 'string' ? analysis : (analysis && analysis.text) || '';
+  const insightsText = typeof insights === 'string' ? insights : (insights && insights.text) || '';
+  const blocks = []
+    .concat(summary_text ? ["Summary", summary_text] : [])
+    .concat(analysisText ? ["Financial analysis", analysisText] : [])
+    .concat(insightsText ? ["Financial insights", insightsText] : []);
+  box.textContent = blocks.join("\n\n");
 }
 
-function clearWorkbookInsights(){
-  const el = document.querySelector('#workbook_insights, .workbook-insights, [data-role="workbook-insights"]');
-  if (el) el.remove();
+function hardRemoveWorkbookInsights(){
+  // Remove by common selectors
+  const sels = ['#workbook_insights','.workbook-insights','[data-role="workbook-insights"]'];
+  sels.forEach(s => document.querySelectorAll(s).forEach(n => n.remove()));
+  // Fallback: remove any section whose heading reads "Workbook Insights"
+  Array.from(document.querySelectorAll('section,div')).forEach(n => {
+    const txt = (n.textContent || '').trim();
+    if (/^Workbook Insights/i.test(txt)) n.remove();
+  });
 }
 
 // NEW: render workbook insights (cards + simple tables)
