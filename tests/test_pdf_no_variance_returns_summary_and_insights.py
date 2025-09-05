@@ -15,4 +15,4 @@ def test_pdf_no_variance():
     assert "summary" in j and "analysis" in j and "insights" in j
     assert isinstance(j.get("summary_text"), str)
     assert "items" not in j["summary"]
-    assert "message" in j and "budget-vs-actual" in j["message"].lower()
+    assert "message" not in j

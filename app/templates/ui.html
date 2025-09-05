@@ -635,11 +635,7 @@
       `;
       box.appendChild(div);
     });
-    if (insights && (insights.totals_per_vendor || insights.top_lines_by_amount)) {
-      const pre = document.createElement('pre');
-      pre.textContent = JSON.stringify(insights, null, 2);
-      box.appendChild(pre);
-    }
+    // (Raw JSON dump removed to keep UI concise)
   }
 
   function renderInsights(ins) {

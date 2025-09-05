@@ -13,6 +13,5 @@ def test_from_file_no_variance():
     assert "summary" in j and "analysis" in j and "insights" in j
     assert isinstance(j.get("summary_text"), str)
     assert "items" not in j["summary"]
-    assert "economic_analysis" in j  # backwards compatibility
-    assert "message" in j
-    assert "budget-vs-actual" in j["message"].lower()
+    assert "economic_analysis" not in j
+    assert "message" not in j

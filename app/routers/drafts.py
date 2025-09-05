@@ -32,10 +32,9 @@ async def from_file(file: UploadFile = File(...)):
                 "kind": "variance",
                 "variance_items": variance,
                 "insights": compute_variance_insights(variance),
-                "diagnostics": parsed.get("diagnostics", {}),
             }
 
-        # Path B: No variance detected → show summary + analysis + insights
+        # Path B: No variance detected → return summary + analysis + insights ONLY (no cards/diagnostics)
         ps_full = parsed.get("procurement_summary") or {}
         ps = ps_full.get("items") or []
         if ps:
@@ -52,22 +51,14 @@ async def from_file(file: UploadFile = File(...)):
             summary_text = summarize_financials(summary, insights if isinstance(insights, dict) else {})
             return {
                 "kind": "insights",
-                "message": "No budget-vs-actual data detected. Showing summary and insights instead.",
-                "procurement_summary": {
-                    "items": ps,
-                    "meta": ps_full.get("meta", {}),
-                },
                 "summary": summary,
                 "analysis": analysis,
-                "economic_analysis": analysis,
                 "insights": insights,
                 "summary_text": summary_text,
-                "diagnostics": parsed.get("diagnostics", {}),
             }
 
         return {
             "error": "We couldn’t find budget/actuals or recognizable procurement lines in this file.",
-            "diagnostics": parsed.get("diagnostics", {}),
         }
     except Exception as e:
         return {"error": str(e)}
