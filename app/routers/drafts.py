@@ -51,11 +51,14 @@ async def from_file(file: UploadFile = File(...)):
             return {
                 "kind": "insights",
                 "message": "No budget-vs-actual data detected. Showing summary and insights instead.",
+                "procurement_summary": {
+                    "items": ps,
+                    "meta": ps_full.get("meta", {}),
+                },
                 "summary": summary,
                 "analysis": analysis,
                 "economic_analysis": analysis,
                 "insights": insights,
-                "procurement_summary": ps_full,
                 "diagnostics": parsed.get("diagnostics", {}),
             }
 

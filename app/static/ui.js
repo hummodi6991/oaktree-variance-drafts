@@ -35,8 +35,13 @@ async function generateFromSingleFile() {
     if (data.message) renderNotice(data.message);
     renderProcurementSummary({ items: procurement, insights: data.insights || data.analysis || {} });
   } else if (data && (data.kind === "insights" || data.mode === "insights")) {
+    const ps = (data.procurement_summary && data.procurement_summary.items) ? data.procurement_summary.items : [];
+    if (ps.length) {
+      if (data.message) renderNotice(data.message);
+      renderProcurementSummary({ items: ps, insights: data.insights || {} });
+    }
     renderInsights(data.insights || {});
-    if (data.message) renderNotice(data.message);
+    setStatus && setStatus('Done');
   } else {
     renderSingleFileError('No budget/actuals found. Showing file-level insights instead.');
   }
