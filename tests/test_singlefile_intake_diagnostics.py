@@ -18,3 +18,10 @@ def test_parse_single_file_returns_diagnostics():
     diag = resp["diagnostics"]
     assert diag.get("correlation_id")
     assert isinstance(diag.get("events"), list)
+
+
+def test_parse_single_file_no_budget_actual_returns_analysis():
+    df = pd.DataFrame({"vendor": ["ACME"], "amount": [100], "description": ["Item1"]})
+    b = _csv_bytes(df)
+    resp = parse_single_file("simple.csv", b)
+    assert "analysis" in resp and "insights" in resp
