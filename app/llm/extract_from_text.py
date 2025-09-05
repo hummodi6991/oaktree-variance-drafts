@@ -18,6 +18,8 @@ SYSTEM = (
 )
 
 def extract_items_via_llm(text: str) -> List[Dict[str, Any]]:
+    if not text or not text.strip():
+        return []
     prompt = f"""
     From the text below, extract an array of items with this JSON schema:
 
@@ -45,19 +47,22 @@ def extract_items_via_llm(text: str) -> List[Dict[str, Any]]:
     """
     if client is None:
         return []
-    resp = client.responses.create(
-      model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-      temperature=0,
-      input=[{"role":"system","content":SYSTEM},{"role":"user","content":prompt}],
-      response_format={"type":"json_object"}
-    )
     try:
-        raw = resp.output_text
-        data = json.loads(raw)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and "items" in data and isinstance(data["items"], list):
-            return data["items"]
+        resp = client.responses.create(
+          model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+          temperature=0,
+          input=[{"role":"system","content":SYSTEM},{"role":"user","content":prompt}],
+          response_format={"type":"json_object"}
+        )
+        try:
+            raw = resp.output_text
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and "items" in data and isinstance(data["items"], list):
+                return data["items"]
+        except Exception:
+            pass
     except Exception:
-        pass
+        return []
     return []

@@ -76,6 +76,9 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
     if name.endswith(".pdf"):
       diag.step("parse_pdf_start")
       text = _extract_text_safe(data, diag=diag)
+      diag.step("pdf_text_extracted", chars=len(text))
+      if not text.strip():
+        diag.warn("empty_pdf_text")
       lt = text.lower()
       if "budget" in lt and "actual" in lt:
         variance_rows: List[Dict[str, Any]] = []
@@ -111,13 +114,15 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
       )
       if needs_llm:
         from app.llm.extract_from_text import extract_items_via_llm
-
-        diag.step("llm_fallback_start")
-        try:
-          llm_items = extract_items_via_llm(text[:4000])
-        except Exception as e:
-          llm_items = []
-          diag.warn("llm_failed", error=str(e))
+        llm_items: List[Dict[str, Any]] = []
+        if text.strip():
+          diag.step("llm_fallback_start")
+          try:
+            llm_items = extract_items_via_llm(text[:4000])
+          except Exception as e:
+            diag.warn("llm_failed", error=str(e))
+        else:
+          diag.warn("llm_skipped_no_text")
         if llm_items:
           diag.step("llm_fallback_success", items=len(llm_items))
           if items:
