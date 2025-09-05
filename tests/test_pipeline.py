@@ -66,3 +66,26 @@ def test_generate_drafts_change_orders_only():
     assert summary["kind"] == "summary"
     assert summary["insights"]["total_change_orders"] == 1
     assert summary["insights"]["total_amount_sar"] == 150000.0
+
+
+def test_generate_drafts_no_budget_actual_pairs_returns_summary():
+    budget_actuals = [
+        BudgetActualRow(
+            project_id="P1",
+            period="2024-01",
+            cost_code="100-200",
+            category="Materials",
+            budget_sar=1000,
+            actual_sar=0,
+        )
+    ]
+    req = DraftRequest(
+        budget_actuals=budget_actuals,
+        change_orders=[],
+        vendor_map=[],
+        category_map=[],
+        config=ConfigModel(materiality_pct=0, materiality_amount_sar=0),
+    )
+    summary = generate_drafts(req)
+    assert summary["kind"] == "summary"
+    assert summary["insights"].get("row_count") == 1

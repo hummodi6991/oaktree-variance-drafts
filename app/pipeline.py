@@ -116,6 +116,14 @@ def _summarize_change_orders(change_orders: List[ChangeOrderRow], cat_lu: Dict[s
         })
 
     top = sorted(top, key=lambda r: r.get("amount_sar") or 0.0, reverse=True)[:20]
+    top_cat = max(by_cat.items(), key=lambda x: x[1]) if by_cat else (None, 0.0)
+    highlights = [
+        f"{count} change order(s) totaling {round(total, 2):,} SAR.",
+    ]
+    if top_cat[0]:
+        highlights.append(
+            f"Highest category: {top_cat[0]} ({round(top_cat[1], 2):,} SAR)."
+        )
     return {
         "kind": "summary",
         "message": "No budget/actuals detected — showing change-order summary.",
@@ -127,6 +135,18 @@ def _summarize_change_orders(change_orders: List[ChangeOrderRow], cat_lu: Dict[s
                 for k, v in sorted(by_cat.items(), key=lambda x: -x[1])
             ],
             "top_change_orders_by_amount": top,
+            "highlights": highlights,
+            "cards": [
+                {"title": "Total amount", "value_sar": round(total, 2)},
+                {"title": "Change orders", "value": count},
+            ],
+            "tables": {
+                "totals_by_category": [
+                    {"category": k, "total_amount_sar": round(v, 2)}
+                    for k, v in sorted(by_cat.items(), key=lambda x: -x[1])
+                ],
+                "top_change_orders_by_amount": top,
+            },
         },
     }
 
@@ -195,6 +215,14 @@ def _summarize_generic_rows(rows: List[Dict[str, Any]], label: str = "rows") -> 
     totals_by_group = [
         {"group": k, "total_amount": round(v, 2)} for k, v in sorted(by_group.items(), key=lambda x: -x[1])
     ]
+    top_group = max(totals_by_group, key=lambda x: x["total_amount"], default=None)
+    highlights = [
+        f"{len(rows)} {label} row(s) totaling {round(total, 2):,} in {amount_key}.",
+    ]
+    if top_group:
+        highlights.append(
+            f"Top group: {top_group['group']} ({top_group['total_amount']:,})."
+        )
     return {
         "kind": "summary",
         "message": "No budget/actuals detected — showing generic summary.",
@@ -205,6 +233,12 @@ def _summarize_generic_rows(rows: List[Dict[str, Any]], label: str = "rows") -> 
             "totals_by_group": totals_by_group,
             "top_rows_by_amount": top,
             "label": label,
+            "highlights": highlights,
+            "cards": [{"title": "Total", "value": round(total, 2)}],
+            "tables": {
+                "totals_by_group": totals_by_group,
+                "top_rows_by_amount": top,
+            },
         },
     }
 
@@ -226,10 +260,20 @@ def generate_drafts(
 
     progress_cb(25, "Computing variances")
     items = group_variances(req.budget_actuals, cat_lu)
-    if items:
+    has_pairs = any(v.budget_sar and v.actual_sar for v in items)
+    if items and has_pairs:
         attach_drivers_and_vendors(items, req.change_orders, req.vendor_map, cat_lu)
     else:
-        # No budget/actuals: return summary+insights (generic across uploads)
+        # No budget/actual pairs: return summary+insights
+        rows = [
+            r.dict() if hasattr(r, "dict") else dict(r)
+            for r in (getattr(req, "budget_actuals", []) or [])
+        ]
+        if rows:
+            progress_cb(40, "Summarizing budget/actuals")
+            summary = _summarize_generic_rows(rows, label="budget_actuals")
+            summary["message"] = "No budget/actual pairs detected — showing summary."
+            return summary
         if req.change_orders:
             progress_cb(40, "Summarizing change orders")
             return _summarize_change_orders(req.change_orders, cat_lu)
@@ -252,6 +296,12 @@ def generate_drafts(
 
     progress_cb(55, "Preparing EN prompt")
     material = filter_materiality(items, req.config)
+    if not material:
+        rows = [r.dict() if hasattr(r, "dict") else dict(r) for r in req.budget_actuals]
+        progress_cb(60, "Summarizing budget/actuals")
+        summary = _summarize_generic_rows(rows, label="budget_actuals")
+        summary["message"] = "No variances met materiality — showing summary."
+        return summary
     out: List[DraftResponse] = []
     for v in material:
         progress_cb(75, "Calling model (EN)")
