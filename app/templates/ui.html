@@ -337,51 +337,25 @@
       }
       const f = $('fSingle').files[0];
       if (!f) { setStatus('Please choose a file.', 'err'); return; }
-      setStatus('Processing…'); setBar(25); $('btnSingle').disabled = true;
-
-      // Step 1: extract tolerant rows from the uploaded file
-      const fd = new FormData(); fd.append('files', f);
-      const resp = await fetch('/extract/freeform', { method: 'POST', body: fd });
+      const fd = new FormData();
+      fd.append('file', f);
+      fd.append('bilingual', $('optBilingual').checked ? 'true' : 'false');
+      fd.append('no_speculation', $('optNoSpec').checked ? 'true' : 'false');
+      setStatus('Calling API…'); setBar(60); $('btnSingle').disabled = true;
+      const resp = await fetch('/drafts/from-file', { method: 'POST', body: fd });
       if (!resp.ok) {
         const txt = await resp.text();
         setStatus('API error: ' + resp.status + ' ' + resp.statusText + '\n' + txt, 'err');
         setBar(0); $('btnSingle').disabled = false; return;
       }
-      const extracted = await resp.json();
-      const rows = extracted.rows || [];
-      if (!rows.length) {
-        setStatus('No valid rows found in file.', 'err');
-        setBar(0); $('btnSingle').disabled = false; return;
+      const result = await resp.json();
+      if (result && result.error) {
+        setStatus(result.error, 'err'); setBar(0); $('btnSingle').disabled = false;
+        $('result').textContent = result.error;
+        return;
       }
-
-      // Step 2: call the drafts endpoint with the extracted rows
-      const cfg = {
-        materiality_pct: Number($('materialityPct').value || 5),
-        materiality_amount_sar: Number($('materialityAmt').value || 100000),
-        bilingual: $('optBilingual').checked,
-        enforce_no_speculation: $('optNoSpec').checked,
-      };
-      setStatus('Calling API…'); setBar(60);
-      const payload = {
-        budget_actuals: [],
-        change_orders: rows,
-        vendor_map: [],
-        category_map: [],
-        config: cfg,
-      };
-      const resp2 = await fetch('/drafts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!resp2.ok) {
-        const txt = await resp2.text();
-        setStatus('API error: ' + resp2.status + ' ' + resp2.statusText + '\n' + txt, 'err');
-        setBar(0); $('btnSingle').disabled = false; return;
-      }
-      const result = await resp2.json();
       setStatus('Done', 'ok'); setBar(100);
-      renderResult(result);
+      renderFromFileResult(result);
     } catch (err) {
       setStatus(String(err && err.message ? err.message : err), 'err'); setBar(0);
     } finally {
@@ -566,6 +540,85 @@
 
     $('result').innerHTML = '';
     $('result').appendChild(container);
+  }
+
+  function renderFromFileResult(data) {
+    if (data.variance_items && data.variance_items.length) {
+      renderResult({ variances: data.variance_items });
+      return;
+    }
+    const ps = (data.procurement_summary && data.procurement_summary.items && data.procurement_summary.items.length)
+      ? { items: data.procurement_summary.items, insights: data.insights || data.economic_analysis || {} }
+      : (data.summary && data.summary.items && data.summary.items.length)
+        ? { items: data.summary.items, insights: data.insights || data.economic_analysis || {} }
+        : null;
+    if (ps) {
+      renderProcurementSummary(ps);
+      return;
+    }
+    if (data.insights) {
+      renderInsights(data.insights);
+      return;
+    }
+    $('result').textContent = 'No variance items found.';
+  }
+
+  function renderProcurementSummary({ items, insights }) {
+    const box = $('result');
+    box.innerHTML = '';
+    items.forEach(it => {
+      const div = document.createElement('section');
+      div.className = 'report__card';
+      div.innerHTML = `
+        <div class="card__head">
+          <div>
+            <h3>${escapeHtml(it.item_code || '—')}</h3>
+            <div class="muted">Vendor: ${escapeHtml(it.vendor_name || it.vendor || '—')}</div>
+          </div>
+          <div class="figures">
+            <div><span class="label">Qty</span><span class="val">${escapeHtml(it.qty ?? '—')}</span></div>
+            <div><span class="label">Unit price</span><span class="val">${escapeHtml(it.unit_price_sar ?? '—')}</span></div>
+            <div><span class="label">Amount</span><span class="val">${escapeHtml(it.amount_sar ?? '—')}</span></div>
+          </div>
+        </div>
+        <div class="blk"><p>${escapeHtml(it.description || '')}</p></div>
+      `;
+      box.appendChild(div);
+    });
+    if (insights && (insights.totals_per_vendor || insights.top_lines_by_amount)) {
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(insights, null, 2);
+      box.appendChild(pre);
+    }
+  }
+
+  function renderInsights(ins) {
+    const box = $('result');
+    box.innerHTML = '';
+    const highlights = (ins && ins.highlights && ins.highlights.length)
+      ? ('<ul>' + ins.highlights.map(x => `<li>${escapeHtml(x)}</li>`).join('') + '</ul>')
+      : '<p class="muted">No highlights available.</p>';
+    const cards = (ins && ins.cards)
+      ? ins.cards.map(c => `<div>${escapeHtml(c.title || c.sheet || 'Metric')}: ${escapeHtml(String(c.value_sar ?? c.value ?? '—'))}</div>`).join('')
+      : '';
+    const div = document.createElement('section');
+    div.className = 'report__card';
+    div.innerHTML = `<div class="card__head"><div><h3>Workbook Insights</h3></div></div>${highlights}${cards}`;
+    box.appendChild(div);
+    function appendTable(title, rows, cols) {
+      if (!rows || !rows.length) return;
+      const table = document.createElement('table');
+      const th = cols.map(c => `<th>${escapeHtml(c)}</th>`).join('');
+      const trs = rows.slice(0, 20).map(r => `<tr>${cols.map(c => `<td>${escapeHtml(String(r[c] ?? ''))}</td>`).join('')}</tr>`).join('');
+      table.innerHTML = `<thead><tr>${th}</tr></thead><tbody>${trs}</tbody>`;
+      const wrap = document.createElement('section');
+      wrap.className = 'report__card';
+      wrap.innerHTML = `<div class="card__head"><div><h3>${escapeHtml(title)}</h3></div></div>`;
+      wrap.appendChild(table);
+      box.appendChild(wrap);
+    }
+    appendTable('Top vendors by spend', (ins.tables && ins.tables['workbook::vendor_totals']) || [], ['vendor','total_sar']);
+    appendTable('Largest bid spreads', (ins.tables && ins.tables['workbook::vendor_spreads']) || [], ['description','min_vendor','min_unit_sar','max_vendor','max_unit_sar','spread_pct']);
   }
 
   // helpers used in report
