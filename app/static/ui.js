@@ -23,13 +23,6 @@ async function generateFromSingleFile() {
     return;
   }
   // NEW: Insights fallback (single-file track with no B/A and no recognizable line items)
-  if (data && (data.kind === "insights" || data.mode === "insights")) {
-    renderInsights(data.insights || {});
-    if (data.message) renderNotice(data.message);
-    setStatus && setStatus('Done');
-    return;
-  }
-
   const variance = (data.variance_items || []);
   const hasVariance = Array.isArray(variance) && variance.length > 0;
   const procurement = (data.procurement_summary && data.procurement_summary.items)
@@ -40,7 +33,10 @@ async function generateFromSingleFile() {
     renderVarianceDraftCards(variance);
   } else if (hasProcurement) {
     if (data.message) renderNotice(data.message);
-    renderProcurementSummary({ items: procurement, insights: data.insights || {} });
+    renderProcurementSummary({ items: procurement, insights: data.insights || data.analysis || {} });
+  } else if (data && (data.kind === "insights" || data.mode === "insights")) {
+    renderInsights(data.insights || {});
+    if (data.message) renderNotice(data.message);
   } else {
     renderSingleFileError('No budget/actuals found. Showing file-level insights instead.');
   }

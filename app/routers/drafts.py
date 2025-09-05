@@ -35,7 +35,8 @@ async def from_file(file: UploadFile = File(...)):
             }
 
         # Path B: No variance detected → show summary + analysis + insights
-        ps = (parsed.get("procurement_summary") or {}).get("items") or []
+        ps_full = parsed.get("procurement_summary") or {}
+        ps = ps_full.get("items") or []
         if ps:
             analysis = (
                 parsed.get("analysis")
@@ -54,6 +55,7 @@ async def from_file(file: UploadFile = File(...)):
                 "analysis": analysis,
                 "economic_analysis": analysis,
                 "insights": insights,
+                "procurement_summary": ps_full,
                 "diagnostics": parsed.get("diagnostics", {}),
             }
 
