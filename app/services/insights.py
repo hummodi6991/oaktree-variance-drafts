@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import pandas as pd
 import math
 from collections import Counter, defaultdict
@@ -276,24 +276,21 @@ def compute_variance_insights(variance_items: List[Dict[str, Any]]) -> Dict[str,
         if a is not None:
             tot_actual += a
 
-    tot_variance = (tot_actual - tot_budget) if (not math.isnan(tot_actual) and not math.isnan(tot_budget)) else None
+    tot_variance: Optional[float] = (
+        (tot_actual - tot_budget)
+        if (not math.isnan(tot_actual) and not math.isnan(tot_budget))
+        else None
+    )
     over = [r for r in rows if r.get("variance_sar") is not None and r.get("variance_sar") > 0]
     under = [r for r in rows if r.get("variance_sar") is not None and r.get("variance_sar") < 0]
     top_overruns = sorted(over, key=lambda r: r["variance_sar"], reverse=True)[:10]
     top_underruns = sorted(under, key=lambda r: r["variance_sar"])[:10]
 
-    pct_overrun = None
-    try:
-        pct_overrun = ((tot_actual - tot_budget) / tot_budget * 100.0) if tot_budget else None
-    except Exception:
-        pct_overrun = None
-
     return {
-        "summary": {
-            "total_budget_sar": round(tot_budget, 2),
-            "total_actual_sar": round(tot_actual, 2),
-            "total_variance_sar": round(tot_variance, 2) if tot_variance is not None else None,
-            "overall_overrun_pct": round(pct_overrun, 2) if pct_overrun is not None else None,
+        "totals": {
+            "budget_sar": round(tot_budget, 2),
+            "actual_sar": round(tot_actual, 2),
+            "variance_sar": round(tot_variance, 2) if tot_variance is not None else None,
         },
         "top_overruns": top_overruns,
         "top_underruns": top_underruns,

@@ -57,7 +57,6 @@ from app.parsers.single_file import analyze_single_file
 from app.routers import drafts as drafts_router
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
-app.include_router(drafts_router.router)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -629,6 +628,8 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="x-api-ke
 
 
 deps = [Depends(require_api_key)] if REQUIRE_API_KEY else []
+
+app.include_router(drafts_router.router, dependencies=deps)
 
 @app.get("/health")
 def health():
