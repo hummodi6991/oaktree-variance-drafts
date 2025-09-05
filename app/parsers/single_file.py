@@ -196,5 +196,11 @@ async def analyze_single_file(
                 "source": "Uploaded procurement file",
             }
         )
-    return {"report_type": "procurement_summary", "items": cards, "source": name}
+    return {
+        "report_type": "procurement_summary",
+        "items": cards,
+        "source": name,
+        "vendor_name": vendor,
+        "doc_date": date,
+    }
 
