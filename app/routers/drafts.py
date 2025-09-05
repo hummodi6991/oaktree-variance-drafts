@@ -4,6 +4,7 @@ from app.parsers.single_file_intake import parse_single_file
 from app.services.insights import (
     compute_procurement_insights,
     compute_variance_insights,
+    summarize_procurement_lines,
     DEFAULT_BASKET,
 )
 
@@ -42,10 +43,11 @@ async def from_file(file: UploadFile = File(...)):
                 or compute_procurement_insights(ps, basket=DEFAULT_BASKET)
             )
             insights = parsed.get("insights") or analysis
+            summary = summarize_procurement_lines(ps)
             return {
                 "kind": "insights",
                 "message": "No budget-vs-actual data detected. Showing summary and insights instead.",
-                "summary": {"items": ps},
+                "summary": summary,
                 "analysis": analysis,
                 "economic_analysis": analysis,
                 "insights": insights,

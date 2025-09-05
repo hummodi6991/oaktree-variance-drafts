@@ -306,6 +306,33 @@ def compute_procurement_insights(
     return analysis
 
 
+def summarize_procurement_lines(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return a tiny summary for procurement lines.
+
+    This helper avoids returning the raw item cards in API responses when no
+    budget/actual pairs are detected. It computes lightweight highlights such as
+    total line count, distinct vendor count and aggregate amount if available.
+    """
+    vendors: set[str] = set()
+    total = 0.0
+    for it in items or []:
+        v = it.get("vendor_name") or it.get("vendor")
+        if v:
+            vendors.add(str(v))
+        try:
+            amt = float(it.get("amount_sar")) if it.get("amount_sar") is not None else None
+        except Exception:
+            amt = None
+        if amt is not None:
+            total += amt
+    highlights = [f"{len(items)} line(s) detected."]
+    if vendors:
+        highlights.append(f"{len(vendors)} vendor(s) present.")
+    if total:
+        highlights.append(f"Total amount ≈ {round(total, 2):,} SAR.")
+    return {"highlights": highlights}
+
+
 # --- Variance insights for Budget vs Actual ---
 def compute_variance_insights(variance_items: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Rollups for Budget vs Actual variance rows produced by the single-file track.
