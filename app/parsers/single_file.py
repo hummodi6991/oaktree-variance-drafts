@@ -1,9 +1,15 @@
-from typing import Dict, Any, List, Tuple
-import io, re, csv
-from datetime import datetime
+from typing import Dict, Any, List
+import io
+import re
 import pdfplumber
 import docx
 import pandas as pd
+
+from app.services.insights import (
+    compute_procurement_insights,
+    summarize_procurement_lines,
+    DEFAULT_BASKET,
+)
 
 RE_MONEY = re.compile(r"(?<![\d.])(?:SAR|SR|ر\.س)?\s*([0-9]{1,3}(?:[,0-9]{0,3})*(?:\.[0-9]{1,2})?)", re.I)
 RE_DATE  = re.compile(r"(20\d{2}[/-]\d{1,2}[/-]\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]20\d{2})")
@@ -69,9 +75,7 @@ def _extract_proc_lines(dfs: List[pd.DataFrame], text: str) -> List[Dict[str, An
         df2 = df.copy()
         df2.columns = [str(c).strip().lower() for c in df2.iloc[0].tolist()]
         df2 = df2.iloc[1:].reset_index(drop=True)
-        cols = "|".join(df2.columns)
         has_qty = any("qty" in c for c in df2.columns)
-        has_unit = any(c in df2.columns for c in ["unit", "units"])
         # accept many flavors
         price_cols = [c for c in df2.columns if ("unit price" in c) or ("u. rate" in c) or ("price" == c)]
         total_cols = [c for c in df2.columns if ("total" in c) and ("vat" not in c)]
@@ -196,9 +200,13 @@ async def analyze_single_file(
                 "source": "Uploaded procurement file",
             }
         )
+    analysis = compute_procurement_insights(cards, basket=DEFAULT_BASKET)
+    summary = summarize_procurement_lines(cards)
     return {
         "report_type": "procurement_summary",
-        "items": cards,
+        "summary": summary,
+        "analysis": analysis,
+        "insights": analysis,
         "source": name,
         "vendor_name": vendor,
         "doc_date": date,
