@@ -10,7 +10,13 @@ from app.services.doors_quotes_adapter import (
     is_doors_quotes_workbook,
     adapt as adapt_doors_quotes,
 )
-from app.services.insights import generate_insights_for_workbook
+from app.services.insights import (
+    generate_insights_for_workbook,
+    compute_procurement_insights,
+    compute_variance_insights,
+    summarize_procurement_lines,
+)
+from app.parsers.single_file_intake import parse_single_file
 
 
 DEFAULT_MATERIALITY_PCT = 5.0
@@ -189,13 +195,93 @@ def _build_report_markdown_for_generic_insights(insights: Dict[str, Any], filena
     return "\n".join(md).strip()
 
 
+def _build_report_markdown_for_variance(insights: Dict[str, Any], filename: str) -> str:
+    """Markdown report for budget vs actual variance extracted from PDFs."""
+    totals = insights.get("totals", {}) if isinstance(insights, dict) else {}
+    over = insights.get("top_overruns", []) if isinstance(insights, dict) else []
+    under = insights.get("top_underruns", []) if isinstance(insights, dict) else []
+
+    bullets = []
+    if totals.get("budget_sar") is not None:
+        bullets.append(f"**Total budget:** {_fmt_currency(totals.get('budget_sar'))}")
+    if totals.get("actual_sar") is not None:
+        bullets.append(f"**Total actual:** {_fmt_currency(totals.get('actual_sar'))}")
+    if totals.get("variance_sar") is not None:
+        bullets.append(f"**Variance:** {_fmt_currency(totals.get('variance_sar'))}")
+
+    over_rows = [
+        [str(r.get("label") or "Item"), _fmt_currency(r.get("variance_sar"))]
+        for r in over
+    ]
+    under_rows = [
+        [str(r.get("label") or "Item"), _fmt_currency(r.get("variance_sar"))]
+        for r in under
+    ]
+
+    md: List[str] = [f"### Single-File Summary — {filename}", ""]
+    if bullets:
+        md.append("#### Totals")
+        md.append("\n".join(f"- {b}" for b in bullets))
+        md.append("")
+    if over_rows:
+        md.append("#### Top overruns")
+        md.append(_md_table(["Item", "Variance"], over_rows))
+        md.append("")
+    if under_rows:
+        md.append("#### Top underruns")
+        md.append(_md_table(["Item", "Variance"], under_rows))
+        md.append("")
+    return "\n".join(md).strip()
+
+
 def process_single_file(
     filename: str,
     data: bytes,
     materiality_pct: float = DEFAULT_MATERIALITY_PCT,
     materiality_amt_sar: float = DEFAULT_MATERIALITY_AMT_SAR,
 ) -> Dict[str, Any]:
-    """Simplified single-file parser returning quote comparison or workbook insights."""
+    """Simplified single-file parser returning quote comparison, workbook or PDF insights."""
+    name = (filename or "").lower()
+
+    if name.endswith(".pdf"):
+        parsed = parse_single_file(filename, data) or {}
+
+        variance = parsed.get("variance_items") or []
+        if variance:
+            insights = compute_variance_insights(variance)
+            return {
+                "mode": "variance",
+                "variance_items": variance,
+                "insights": insights,
+                "analysis": insights,
+                "report_markdown": _build_report_markdown_for_variance(insights, filename),
+                "diagnostics": parsed.get("diagnostics", {}),
+            }
+
+        items = (parsed.get("procurement_summary") or {}).get("items") or []
+        analysis = (
+            parsed.get("analysis")
+            or parsed.get("economic_analysis")
+            or compute_procurement_insights(items)
+        )
+        insights = parsed.get("insights") or analysis
+        summary = summarize_procurement_lines(items)
+        md: List[str] = [f"### Single-File Summary — {filename}", ""]
+        highs = summary.get("highlights") or []
+        if highs:
+            md.append("#### Highlights")
+            md.append("\n".join(f"- {h}" for h in highs))
+            md.append("")
+        return {
+            "mode": "summary",
+            "items": items,
+            "analysis": analysis,
+            "economic_analysis": analysis,
+            "insights": insights,
+            "report_markdown": "\n".join(md).strip(),
+            "diagnostics": parsed.get("diagnostics", {}),
+        }
+
     with DiagnosticContext(file_name=filename, file_size=len(data)) as diag:
         diag.step("singlefile_start", filename=filename)
         wb = _load_workbook(filename, data)
