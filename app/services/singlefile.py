@@ -266,25 +266,19 @@ def process_single_file(
             or compute_procurement_insights(items)
         )
         insights = parsed.get("insights") or analysis
+        if isinstance(insights, dict):
+            insights.pop("cards", None)
+            insights.pop("tables", None)
         summary = summarize_procurement_lines(items)
         highs = summary.get("highlights") or []
         if highs and isinstance(insights, dict):
             insights = {**insights, "highlights": highs}
         summary_text = summarize_financials(summary, insights if isinstance(insights, dict) else {})
-        md: List[str] = [f"### Single-File Summary — {filename}", ""]
-        if highs:
-            md.append("#### Highlights")
-            md.append("\n".join(f"- {h}" for h in highs))
-            md.append("")
         return {
-            "mode": "summary",
-            "items": items,
-            "analysis": analysis,
-            "economic_analysis": analysis,
             "summary": summary,
+            "analysis": analysis,
             "insights": insights,
             "summary_text": summary_text,
-            "report_markdown": "\n".join(md).strip(),
             "diagnostics": parsed.get("diagnostics", {}),
         }
 
@@ -311,19 +305,26 @@ def process_single_file(
             try:
                 sheets = {sn: wb.parse(sn) for sn in wb.sheet_names}
                 insights = generate_insights_for_workbook(sheets)
+                if isinstance(insights, dict):
+                    insights.pop("cards", None)
+                    insights.pop("tables", None)
+                summary_text = summarize_financials({}, insights if isinstance(insights, dict) else {})
                 result = {
-                    "mode": "insights",
+                    "summary": {},
+                    "analysis": insights,
                     "insights": insights,
-                    "report_markdown": _build_report_markdown_for_generic_insights(insights, filename),
+                    "summary_text": summary_text,
                     "diagnostics": diag.to_dict(),
                 }
-                diag.step("report_built", length=len(result.get("report_markdown") or ""))
                 return result
             except Exception as e:  # pragma: no cover - defensive
                 diag.error("insights_failed", e)
+                insights = {"highlights": ["Unable to summarize this workbook."]}
                 return {
-                    "mode": "insights",
-                    "insights": {"highlights": ["Unable to summarize this workbook."]},
+                    "summary": {},
+                    "analysis": insights,
+                    "insights": insights,
+                    "summary_text": summarize_financials({}, insights),
                     "diagnostics": diag.to_dict(),
                 }
 
@@ -331,19 +332,25 @@ def process_single_file(
             df = wb["__csv__"]
             diag.step("read_csv_success", rows=int(df.shape[0]), cols=int(df.shape[1]))
             insights = generate_insights_for_workbook({"Sheet1": df})
+            if isinstance(insights, dict):
+                insights.pop("cards", None)
+                insights.pop("tables", None)
             result = {
-                "mode": "insights",
+                "summary": {},
+                "analysis": insights,
                 "insights": insights,
-                "report_markdown": _build_report_markdown_for_generic_insights(insights, filename),
+                "summary_text": summarize_financials({}, insights if isinstance(insights, dict) else {}),
                 "diagnostics": diag.to_dict(),
             }
-            diag.step("report_built", length=len(result.get("report_markdown") or ""))
             return result
 
         diag.warn("unsupported_or_empty", filename=filename)
+        insights = {"highlights": ["Unsupported or empty file."]}
         return {
-            "mode": "insights",
-            "insights": {"highlights": ["Unsupported or empty file."]},
+            "summary": {},
+            "analysis": insights,
+            "insights": insights,
+            "summary_text": summarize_financials({}, insights),
             "diagnostics": diag.to_dict(),
         }
 

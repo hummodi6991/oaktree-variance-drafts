@@ -381,7 +381,6 @@
       try { data = JSON.parse(txt); } catch (_) {}
       if (!res.ok || (data && data.error)) {
         setStatus((data && data.error) ? data.error : `Request failed (HTTP ${res.status})`);
-        if (data && data.diagnostics) { renderDiagnostics(data.diagnostics); }
         return;
       }
       clearReport();

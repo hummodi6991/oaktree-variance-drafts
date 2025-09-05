@@ -9,12 +9,10 @@ async function generateFromSingleFile() {
   try { data = await resp.json(); } catch (_) {}
   if (!resp.ok) {
     renderSingleFileError((data && data.error) ? data.error : `Request failed (HTTP ${resp.status})`);
-    if (data && data.diagnostics) { renderDiagnostics(data.diagnostics); }
     return;
   }
   if (data && data.error) {
     renderSingleFileError(data.error);
-    if (data.diagnostics) { renderDiagnostics(data.diagnostics); }
     return;
   }
   if (data && (data.kind === "quote_compare" || data.mode === "quote_compare")) {
@@ -44,9 +42,6 @@ async function generateFromSingleFile() {
     setStatus && setStatus('Done');
   } else {
     renderSingleFileError('No budget/actuals found. Showing file-level insights instead.');
-  }
-  if (data && data.diagnostics) {
-    renderDiagnostics(data.diagnostics);
   }
 }
 
@@ -225,64 +220,7 @@ function renderNotice(msg) {
   }
 }
 
-function renderDiagnostics(diag) {
-  const container = document.getElementById('results') || document.body;
-  const section = document.createElement('section');
-  section.className = 'diagnostics';
-
-  const details = document.createElement('details');
-  details.open = false;
-  const summary = document.createElement('summary');
-  summary.textContent = 'Diagnostics';
-  details.appendChild(summary);
-
-  const meta = document.createElement('div');
-  meta.innerHTML = `
-    <div style="margin:8px 0;">
-      <strong>Correlation ID:</strong> <code>${escapeHtml(diag.correlation_id || '')}</code><br/>
-      <strong>Duration:</strong> ${Number(diag.duration_ms||0)} ms<br/>
-      <strong>Sheets/Steps:</strong> ${Array.isArray(diag.events) ? diag.events.length : 0} events,
-      <strong>Warnings:</strong> ${Array.isArray(diag.warnings) ? diag.warnings.length : 0}
-    </div>
-  `;
-  details.appendChild(meta);
-
-  if (Array.isArray(diag.warnings) && diag.warnings.length) {
-    const w = document.createElement('div');
-    w.innerHTML = `<strong>Warnings</strong>`;
-    const ul = document.createElement('ul');
-    diag.warnings.forEach(wrn => {
-      const li = document.createElement('li');
-      li.textContent = `[${wrn.code}] ${wrn.message || ''}`;
-      ul.appendChild(li);
-    });
-    w.appendChild(ul);
-    details.appendChild(w);
-  }
-
-  const pre = document.createElement('pre');
-  pre.style.whiteSpace = 'pre-wrap';
-  const json = JSON.stringify(diag, null, 2);
-  pre.textContent = json;
-
-  const bar = document.createElement('div');
-  bar.style.display = 'flex';
-  bar.style.gap = '8px';
-  bar.style.margin = '8px 0';
-
-  const copyBtn = document.createElement('button');
-  copyBtn.textContent = 'Copy diagnostics JSON';
-  copyBtn.onclick = async () => {
-    try { await navigator.clipboard.writeText(json); toast('Copied diagnostics'); }
-    catch (e) { toast('Copy failed'); }
-  };
-  bar.appendChild(copyBtn);
-
-  details.appendChild(bar);
-  details.appendChild(pre);
-  section.appendChild(details);
-  container.appendChild(section);
-}
+// diagnostics removed
 
 function escapeHtml(s) {
   return String(s)
@@ -319,9 +257,6 @@ function renderResult(payload) {
     payload.insights.highlights.forEach(t => { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); });
     box.appendChild(ul);
     root.appendChild(box);
-  }
-  if (payload.diagnostics) {
-    renderDiagnostics(payload.diagnostics);
   }
 }
 

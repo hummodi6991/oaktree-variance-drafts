@@ -136,17 +136,6 @@ def _summarize_change_orders(change_orders: List[ChangeOrderRow], cat_lu: Dict[s
             ],
             "top_change_orders_by_amount": top,
             "highlights": highlights,
-            "cards": [
-                {"title": "Total amount", "value_sar": round(total, 2)},
-                {"title": "Change orders", "value": count},
-            ],
-            "tables": {
-                "totals_by_category": [
-                    {"category": k, "total_amount_sar": round(v, 2)}
-                    for k, v in sorted(by_cat.items(), key=lambda x: -x[1])
-                ],
-                "top_change_orders_by_amount": top,
-            },
         },
     }
 
@@ -234,11 +223,6 @@ def _summarize_generic_rows(rows: List[Dict[str, Any]], label: str = "rows") -> 
             "top_rows_by_amount": top,
             "label": label,
             "highlights": highlights,
-            "cards": [{"title": "Total", "value": round(total, 2)}],
-            "tables": {
-                "totals_by_group": totals_by_group,
-                "top_rows_by_amount": top,
-            },
         },
     }
 
