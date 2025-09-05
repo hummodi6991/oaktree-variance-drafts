@@ -3,7 +3,7 @@ import io
 import pandas as pd
 from docx import Document
 from app.utils.diagnostics import DiagnosticContext
-from .procurement_pdf import parse_procurement_pdf
+from .procurement_pdf import parse_procurement_pdf, _extract_text_safe
 import re
 import pdfplumber
 from app.services.insights import compute_procurement_insights, DEFAULT_BASKET
@@ -95,21 +95,36 @@ def parse_single_file(filename: str, data: bytes) -> Dict[str, Any]:
       except Exception as e:
         diag.warn("pdf_table_scan_failed", error=str(e))
 
-        if variance_rows:
-          diag.step("mode_variance_pdf", rows=int(len(variance_rows)))
-          return {"variance_items": variance_rows, "diagnostics": diag.to_dict()}
+      if variance_rows:
+        diag.step("mode_variance_pdf", rows=int(len(variance_rows)))
+        return {"variance_items": variance_rows, "diagnostics": diag.to_dict()}
 
-        # Fallback: procurement summary extraction from existing PDF parser
-        ps = parse_procurement_pdf(data)
-        diag.step("parse_pdf_success", items=len(ps.get("items", [])))
-        analysis = compute_procurement_insights(ps.get("items", []), basket=DEFAULT_BASKET)
-        return {
-          "procurement_summary": ps,
-          "analysis": analysis,
-          "economic_analysis": analysis,
-          "insights": analysis,
-          "diagnostics": diag.to_dict(),
-        }
+      # Fallback: procurement summary extraction from existing PDF parser
+      ps = parse_procurement_pdf(data)
+      items = ps.get("items") or []
+      diag.step("parse_pdf_success", items=len(items))
+      if not items:
+        txt = _extract_text_safe(data)[:2000]
+        if txt:
+          items = [{
+            "item_code": None,
+            "description": txt,
+            "qty": None,
+            "unit_price_sar": None,
+            "amount_sar": None,
+            "vendor_name": None,
+            "doc_date": None,
+            "source": "uploaded_file",
+          }]
+          ps = {"items": items, "meta": ps.get("meta", {})}
+      analysis = compute_procurement_insights(items, basket=DEFAULT_BASKET)
+      return {
+        "procurement_summary": ps,
+        "analysis": analysis,
+        "economic_analysis": analysis,
+        "insights": analysis,
+        "diagnostics": diag.to_dict(),
+      }
     if name.endswith(".docx"):
       diag.step("parse_docx_start")
       doc = Document(io.BytesIO(data))
