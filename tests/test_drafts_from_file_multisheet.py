@@ -2,7 +2,9 @@ import io
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, require_api_key
+
+app.dependency_overrides[require_api_key] = lambda: None
 
 
 def _multi_sheet_bytes() -> bytes:

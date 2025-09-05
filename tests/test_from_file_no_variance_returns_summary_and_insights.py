@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import app, require_api_key
+
+app.dependency_overrides[require_api_key] = lambda: None
 
 def test_from_file_no_variance():
     client = TestClient(app)
