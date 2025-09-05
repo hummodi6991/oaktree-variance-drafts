@@ -453,6 +453,11 @@
   });
 
   function renderResult(data) {
+    if (data && data.kind === 'summary') {
+      const ins = Object.assign({ title: data.message || 'Summary' }, data.insights || {});
+      renderInsights(ins);
+      return;
+    }
     // Normalize items
     const items = Array.isArray(data?.variances) ? data.variances : (Array.isArray(data) ? data : []);
     const container = document.createElement('div');
@@ -604,7 +609,8 @@
       : '';
     const div = document.createElement('section');
     div.className = 'report__card';
-    div.innerHTML = `<div class="card__head"><div><h3>Workbook Insights</h3></div></div>${highlights}${cards}`;
+    const title = escapeHtml(ins.title || 'Workbook Insights');
+    div.innerHTML = `<div class="card__head"><div><h3>${title}</h3></div></div>${highlights}${cards}`;
     box.appendChild(div);
     function appendTable(title, rows, cols) {
       if (!rows || !rows.length) return;
@@ -620,6 +626,13 @@
     }
     appendTable('Top vendors by spend', (ins.tables && ins.tables['workbook::vendor_totals']) || [], ['vendor','total_sar']);
     appendTable('Largest bid spreads', (ins.tables && ins.tables['workbook::vendor_spreads']) || [], ['description','min_vendor','min_unit_sar','max_vendor','max_unit_sar','spread_pct']);
+    if (ins.tables) {
+      for (const [key, rows] of Object.entries(ins.tables)) {
+        if (key === 'workbook::vendor_totals' || key === 'workbook::vendor_spreads') continue;
+        const cols = Object.keys(rows[0] || {});
+        appendTable(key.replace(/[_:]+/g, ' '), rows, cols);
+      }
+    }
   }
 
   // helpers used in report
