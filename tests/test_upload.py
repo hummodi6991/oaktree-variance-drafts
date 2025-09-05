@@ -94,10 +94,10 @@ def test_upload_single_data_file():
     resp = client.post("/upload", files=files, data={"api_key": "testkey"})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["count"] == 2
-    cards = data["procurement_summary"]
-    assert any(c.get("description") for c in cards)
-    assert all("item_code" in c for c in cards)
+    assert data["mode"] == "summary"
+    assert "analysis" in data
+    assert data["analysis"]["top_lines_by_amount"]
+    assert data.get("summary")
 
 
 def test_upload_single_data_file_budget_variance():
@@ -183,10 +183,11 @@ def test_pdf_fallback(monkeypatch):
     resp = client.post("/upload", files=files, data={"api_key": "testkey"})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["count"] == 2
-    assert data["total_amount_sar"] == 300
-    assert len(data["procurement_summary"]) == 2
-    assert all("item_code" in c for c in data["procurement_summary"])
+    assert data["mode"] == "summary"
+    assert "analysis" in data
+    assert data["analysis"]["top_lines_by_amount"]
+    assert len(data["analysis"]["top_lines_by_amount"]) == 2
+    assert all("description" in c for c in data["analysis"]["top_lines_by_amount"])
 
 
 def test_upload_llm_failure(monkeypatch):
@@ -197,8 +198,9 @@ def test_upload_llm_failure(monkeypatch):
     resp = client.post("/upload", files=files, data={"api_key": "testkey"})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["count"] == 0
-    assert data["procurement_summary"] == []
+    assert data["mode"] == "summary"
+    assert "procurement_summary" not in data
+    assert data.get("summary") == ""
 
 
 def test_extract_freeform_procurement_summary():

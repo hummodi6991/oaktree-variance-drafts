@@ -54,6 +54,8 @@ from .services.csv_loader import parse_tabular
 from app.services.singlefile import process_single_file, draft_bilingual_procurement_card
 from .llm.extract_from_text import extract_items_via_llm
 from app.parsers.single_file import analyze_single_file
+from app.services.insights import compute_procurement_insights, summarize_procurement_lines
+from app.gpt_client import summarize_financials
 from app.routers import drafts as drafts_router
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
@@ -779,113 +781,99 @@ async def upload(
         filtered = [
             r for r in rows if any(v is not None and str(v).strip() != "" for v in r.values())
         ]
-        if mode != "budget_actuals" and (
-            not filtered or not any(r.get("amount_sar") for r in filtered)
-        ):
+        if not filtered:
             if (text or "").strip():
                 summary = textwrap.shorten((text or "").strip(), width=200, placeholder="...")
                 return {"mode": "summary", "summary": summary}
-        if mode == "budget_actuals":
-            if not filtered:
-                return {
-                    "mode": mode,
-                    "drafts": [],
-                    "paired_count": 0,
-                    "unpaired_count": 0,
-                    "unpaired_rows": [],
-                    "unpaired_summary": {
-                        "total_budget_sar": 0.0,
-                        "total_actual_sar": 0.0,
-                    },
-                }
+            return {"mode": "summary", "summary": ""}
+        has_amount = any(
+            (r.get("amount_sar") is not None)
+            or (r.get("budget_sar") is not None)
+            or (r.get("actual_sar") is not None)
+            for r in filtered
+        )
+        if not has_amount:
+            if (text or "").strip():
+                summary = textwrap.shorten((text or "").strip(), width=200, placeholder="...")
+                return {"mode": "summary", "summary": summary}
+            return {"mode": "summary", "summary": ""}
 
+        if mode == "budget_actuals":
             paired = [
                 r
                 for r in filtered
                 if r.get("budget_sar") is not None and r.get("actual_sar") is not None
             ]
-            unpaired = [r for r in filtered if r not in paired]
-
-            drafts = []
             if paired:
-                ba_models = [
-                    BudgetActualRow(
-                        project_id=r.get("project_id") or "Unknown",
-                        period=r.get("period") or "1970-01",
-                        cost_code=r.get("cost_code")
-                        or r.get("linked_cost_code")
-                        or "UNKNOWN",
-                        category=r.get("category"),
-                        budget_sar=float(r.get("budget_sar") or 0),
-                        actual_sar=float(r.get("actual_sar") or 0),
-                        currency=r.get("currency"),
-                        remarks=r.get("remarks"),
+                unpaired = [r for r in filtered if r not in paired]
+                drafts = []
+                if paired:
+                    ba_models = [
+                        BudgetActualRow(
+                            project_id=r.get("project_id") or "Unknown",
+                            period=r.get("period") or "1970-01",
+                            cost_code=r.get("cost_code")
+                            or r.get("linked_cost_code")
+                            or "UNKNOWN",
+                            category=r.get("category"),
+                            budget_sar=float(r.get("budget_sar") or 0),
+                            actual_sar=float(r.get("actual_sar") or 0),
+                            currency=r.get("currency"),
+                            remarks=r.get("remarks"),
+                        )
+                        for r in paired
+                    ]
+                    cfg = ConfigModel(
+                        materiality_pct=materiality_pct,
+                        materiality_amount_sar=materiality_amount_sar,
+                        bilingual=bilingual,
+                        enforce_no_speculation=enforce_no_speculation,
                     )
-                    for r in paired
-                ]
-                cfg = ConfigModel(
-                    materiality_pct=materiality_pct,
-                    materiality_amount_sar=materiality_amount_sar,
-                    bilingual=bilingual,
-                    enforce_no_speculation=enforce_no_speculation,
-                )
-                req = DraftRequest(
-                    budget_actuals=ba_models,
-                    change_orders=[],
-                    vendor_map=[],
-                    category_map=[],
-                    config=cfg,
-                )
-                drafts = generate_drafts(req)
+                    req = DraftRequest(
+                        budget_actuals=ba_models,
+                        change_orders=[],
+                        vendor_map=[],
+                        category_map=[],
+                        config=cfg,
+                    )
+                    drafts = generate_drafts(req)
 
-            unpaired_summary = {
-                "total_budget_sar": sum(
-                    float(r.get("budget_sar") or 0) for r in unpaired
-                ),
-                "total_actual_sar": sum(
-                    float(r.get("actual_sar") or 0) for r in unpaired
-                ),
-            }
+                unpaired_summary = {
+                    "total_budget_sar": sum(
+                        float(r.get("budget_sar") or 0) for r in unpaired
+                    ),
+                    "total_actual_sar": sum(
+                        float(r.get("actual_sar") or 0) for r in unpaired
+                    ),
+                }
+                return {
+                    "mode": mode,
+                    "drafts": [d.model_dump() for d in drafts],
+                    "paired_count": len(paired),
+                    "unpaired_count": len(unpaired),
+                    "unpaired_rows": unpaired,
+                    "unpaired_summary": unpaired_summary,
+                }
+            # No paired rows -> summarize instead of returning cards
+            analysis = compute_procurement_insights(filtered)
+            summary_data = summarize_procurement_lines(filtered)
+            summary_text = summarize_financials(summary_data, analysis)
             return {
-                "mode": mode,
-                "drafts": [d.model_dump() for d in drafts],
-                "paired_count": len(paired),
-                "unpaired_count": len(unpaired),
-                "unpaired_rows": unpaired,
-                "unpaired_summary": unpaired_summary,
+                "mode": "summary",
+                "summary": summary_text,
+                "analysis": analysis,
+                "insights": analysis,
             }
-        # change order style report
-        cards = _build_procurement_summary(filtered, bilingual=bilingual)
-        snapshots = _build_vendor_snapshots(filtered)
-        bid_grid = _build_bid_comparison(filtered)
-        best_mix = _compute_best_mix(filtered)
-        total = sum(c.amount_sar or 0 for c in cards)
-        item_table = [
-            {
-                "item_code": r.get("co_id") or r.get("linked_cost_code"),
-                "description": r.get("description"),
-                "quantity": r.get("quantity"),
-                "unit_price": r.get("unit_price"),
-                "line_total_sar": r.get("amount_sar"),
-                "inclusions": r.get("inclusions"),
-                "exclusions": r.get("exclusions"),
-                "notes": r.get("notes"),
-                "vendor": r.get("vendor_name"),
-            }
-            for r in filtered
-        ]
-        exclusions_audit = sorted({r["exclusions"] for r in filtered if r.get("exclusions")})
-        readiness = "green" if snapshots else "red"
+
+        # No budget/actual pairs detected -> summarize the procurement lines
+        analysis = compute_procurement_insights(filtered)
+        summary_data = summarize_procurement_lines(filtered)
+        summary_text = summarize_financials(summary_data, analysis)
         return {
-            "procurement_summary": [c.model_dump() for c in cards],
-            "vendor_snapshots": [s.model_dump() for s in snapshots],
-            "item_table": item_table,
-            "bid_comparison": bid_grid,
-            "best_mix": best_mix,
-            "exclusions_audit": exclusions_audit,
-            "readiness_to_po": readiness,
-            "count": len(cards),
-            "total_amount_sar": total,
+            "mode": "summary",
+            "summary": summary_text,
+            "analysis": analysis,
+            "insights": analysis,
         }
 
     # Track A: four structured files
