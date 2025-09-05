@@ -26,23 +26,60 @@ async function generateFromSingleFile() {
   const procurement = (data.procurement_summary && data.procurement_summary.items)
     ? data.procurement_summary.items : [];
   const hasProcurement = Array.isArray(procurement) && procurement.length > 0;
-
   if (hasVariance) {
     renderVarianceDraftCards(variance);
-  } else if (hasProcurement) {
-    if (data.message) renderNotice(data.message);
-    renderProcurementSummary({ items: procurement, insights: data.insights || data.analysis || {} });
-  } else if (data && (data.kind === "insights" || data.mode === "insights")) {
-    const ps = (data.procurement_summary && data.procurement_summary.items) ? data.procurement_summary.items : [];
-    if (ps.length) {
-      if (data.message) renderNotice(data.message);
-      renderProcurementSummary({ items: ps, insights: data.insights || {} });
-    }
-    renderInsights(data.insights || {});
+  } else if (hasProcurement || (data && (data.kind === "insights" || data.mode === "insights"))) {
+    // Text-only: summary, analysis, insights (number-supported). No cards/tables/diagnostics.
+    renderSummaryAnalysisInsightsOnly({
+      summary: data.summary || {},
+      analysis: data.analysis || data.economic_analysis || {},
+      insights: data.insights || {},
+      summary_text: data.summary_text || ''
+    });
     setStatus && setStatus('Done');
   } else {
     renderSingleFileError('No budget/actuals found. Showing file-level insights instead.');
   }
+}
+
+// --- Text-only renderer for Single-File no-variance case ---
+function renderSummaryAnalysisInsightsOnly(payload) {
+  const box = document.getElementById('result_box');
+  box.innerHTML = '';
+  const { summary_text, analysis = {}, insights = {} } = payload || {};
+
+  if (summary_text) {
+    const p = document.createElement('p');
+    p.textContent = summary_text;
+    box.appendChild(p);
+  }
+
+  // Minimal numeric bullets (supported by extracted numbers)
+  const ins = (insights && typeof insights === 'object') ? insights : {};
+  const totals = Array.isArray(ins.totals_per_vendor) ? ins.totals_per_vendor
+                : Array.isArray(analysis.totals_per_vendor) ? analysis.totals_per_vendor
+                : [];
+  const top = Array.isArray(ins.top_lines_by_amount) ? ins.top_lines_by_amount
+             : Array.isArray(analysis.top_lines_by_amount) ? analysis.top_lines_by_amount
+             : [];
+
+  const ul = document.createElement('ul');
+  // Grand total
+  if (totals.length) {
+    const grand = totals.reduce((s, r) => s + Number(r.total_sar || r.total_amount_sar || r.total || 0), 0);
+    const li = document.createElement('li');
+    li.textContent = `Total spend (SAR): ${grand.toFixed(2)}`;
+    ul.appendChild(li);
+  }
+  // Top 3 lines by amount
+  top.slice(0, 3).forEach((r, i) => {
+    const li = document.createElement('li');
+    const label = r.description || r.item_code || 'Line';
+    const val = (r.amount_sar ?? r.total_sar ?? r.value ?? '—');
+    li.textContent = `Top ${i + 1}: ${label} — SAR ${val}`;
+    ul.appendChild(li);
+  });
+  if (ul.childNodes.length) box.appendChild(ul);
 }
 
 // NEW: render workbook insights (cards + simple tables)
