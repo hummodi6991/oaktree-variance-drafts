@@ -266,8 +266,10 @@ def process_single_file(
         )
         insights = parsed.get("insights") or analysis
         summary = summarize_procurement_lines(items)
-        md: List[str] = [f"### Single-File Summary — {filename}", ""]
         highs = summary.get("highlights") or []
+        if highs and isinstance(insights, dict):
+            insights = {**insights, "highlights": highs}
+        md: List[str] = [f"### Single-File Summary — {filename}", ""]
         if highs:
             md.append("#### Highlights")
             md.append("\n".join(f"- {h}" for h in highs))
@@ -277,6 +279,7 @@ def process_single_file(
             "items": items,
             "analysis": analysis,
             "economic_analysis": analysis,
+            "summary": summary,
             "insights": insights,
             "report_markdown": "\n".join(md).strip(),
             "diagnostics": parsed.get("diagnostics", {}),
