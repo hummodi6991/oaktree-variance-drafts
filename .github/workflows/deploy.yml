@@ -11,7 +11,7 @@ jobs:
       contents: read
     env:
       AZURE_WEBAPP_NAME: oaktree-variance-dev
-      AZURE_RESOURCE_GROUP: oaktree-variance-rg
+      AZURE_RESOURCE_GROUP: oaktree-variance-dev-rg
 
     steps:
       - name: Checkout
