@@ -528,7 +528,10 @@ def _compute_best_mix(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 @app.post("/extract/freeform")
-async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
+async def extract_freeform(
+    request: Request,
+    files: List[UploadFile] = File(...),
+) -> Dict[str, Any]:
     """Accept CSV/XLSX/DOCX/PDF/TXT and return tolerant row dicts.
 
     The return payload includes a ``mode`` field indicating whether the rows
@@ -536,6 +539,8 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
     (``budget_actuals``). This allows the caller to route the rows to the
     appropriate pipeline.
     """
+    # LLM-only mode: ignore local_only header; fail if LLM fails
+    local_only = False
     all_rows: List[Dict[str, Any]] = []
     mode = "change_orders"
     for f in files:
@@ -557,7 +562,8 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
             text = _text_from_bytes(name, data)
             rows = _rows_from_text(text)
             if not rows:
-                for it in _extract_rows_via_llm(text):
+                from app.utils.retries import retry_iter
+                for it in retry_iter(_extract_rows_via_llm, text):
                     rows.append({
                         "project_id": None,
                         "linked_cost_code": None,
@@ -568,6 +574,9 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
                         "amount_sar": it.get("amount_sar"),
                         "vendor_name": None,
                     })
+            if not rows:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
         else:
             df = _df_from_bytes(name, data)
             if not df.empty:
@@ -582,7 +591,8 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
                 text = _text_from_bytes(name, data)
                 rows = _rows_from_text(text)
                 if not rows:
-                    for it in _extract_rows_via_llm(text):
+                    from app.utils.retries import retry_iter
+                    for it in retry_iter(_extract_rows_via_llm, text):
                         rows.append({
                             "project_id": None,
                             "linked_cost_code": None,
@@ -593,6 +603,9 @@ async def extract_freeform(files: List[UploadFile] = File(...)) -> Dict[str, Any
                             "amount_sar": it.get("amount_sar"),
                             "vendor_name": None,
                         })
+                if not rows:
+                    from fastapi import HTTPException
+                    raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
         all_rows.extend(rows)
     filtered = [
         r
@@ -786,6 +799,7 @@ async def upload(
             if all(all(v in (None, "") for v in r.values()) for r in rows):
                 rows = []
         if not rows:
+            # Always LLM-aided extraction for non-tabular files; no fallbacks.
             text = _text_from_bytes(name, data)
             ba_text = _rows_from_budget_actuals_text(text)
             if ba_text:
@@ -794,8 +808,10 @@ async def upload(
             else:
                 rows = _rows_from_text(text)
                 if not rows:
-                    for it in _extract_rows_via_llm(text):
-                        rows.append({
+                    from app.utils.retries import retry_iter
+                    out: List[Dict[str, Any]] = []
+                    for it in retry_iter(_extract_rows_via_llm, text):
+                        out.append({
                             "project_id": None,
                             "linked_cost_code": None,
                             "description": it.get("description"),
@@ -805,6 +821,10 @@ async def upload(
                             "amount_sar": it.get("amount_sar"),
                             "vendor_name": None,
                         })
+                    rows = out
+                if not rows:
+                    from fastapi import HTTPException
+                    raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
         filtered = [
             r for r in rows if any(v is not None and str(v).strip() != "" for v in r.values())
         ]
