@@ -100,13 +100,22 @@ jobs:
         run: |
           set -euo pipefail
           echo "Deploying $ZIP_PATH to $AZURE_WEBAPP_NAME in $AZURE_RESOURCE_GROUP"
-          az webapp deploy \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --src-path "$ZIP_PATH" \
-            --type zip \
-            --async true \        # <— don’t block here
-            --restart true
+
+          # Try the modern command first (no unsupported flags).
+          if az webapp deploy \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --name "$AZURE_WEBAPP_NAME" \
+                --src-path "$ZIP_PATH" \
+                --type zip ; then
+            echo "Deploy succeeded via 'az webapp deploy'"
+          else
+            echo "Primary deploy failed or not supported; falling back to 'config-zip'…"
+            az webapp deployment source config-zip \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --name "$AZURE_WEBAPP_NAME" \
+                --src "$ZIP_PATH"
+            echo "Deploy succeeded via 'config-zip'"
+          fi
       - name: Wait for site & health check
         shell: bash
         env:
