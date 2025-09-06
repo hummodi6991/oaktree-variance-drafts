@@ -65,4 +65,12 @@ Raw text (possibly noisy, use prudently):
             "analysis_text": blocks[1],
             "insights_text": "\n\n".join(blocks[2:]),
         }
+
+    if not any(out.values()):
+        # Explicit placeholders so UI always shows three blocks
+        out = {
+            "summary_text": "No summary available.",
+            "analysis_text": "No financial analysis available.",
+            "insights_text": "No financial insights available.",
+        }
     return out

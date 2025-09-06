@@ -17,6 +17,6 @@ def process_single_file(filename: str, data: bytes, *_, **__) -> Dict[str, Any]:
     llm_out = llm_financial_summary({"raw_text": text})
     return {
         "summary_text": llm_out.get("summary_text", ""),
-        "analysis": {"text": llm_out.get("analysis_text", "")},
-        "insights": {"text": llm_out.get("insights_text", "")},
+        "analysis_text": llm_out.get("analysis_text", ""),
+        "insights_text": llm_out.get("insights_text", ""),
     }
