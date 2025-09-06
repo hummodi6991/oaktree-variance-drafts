@@ -3,6 +3,7 @@ from typing import Dict, Any
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+
 def _openai_client():
     from openai import OpenAI  # requires openai>=1.0
     return OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -97,6 +98,70 @@ Raw text (possibly noisy, use prudently):
         }
 
     # Very light splitter: try to split into 3 blocks; if not, put everything in 'summary_text'
+    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+    out = {"summary_text": text, "analysis_text": "", "insights_text": ""}
+    if len(blocks) >= 3:
+        out = {
+            "summary_text": blocks[0],
+            "analysis_text": blocks[1],
+            "insights_text": "\n\n".join(blocks[2:]),
+        }
+    return out
+
+
+def llm_financial_summary_file(filename: str, data: bytes) -> Dict[str, str]:
+    """Send a raw uploaded file to ChatGPT for three text sections.
+
+    The file is transmitted to the OpenAI API as an attachment so no local
+    parsing is required.  When the API is unavailable or the request fails, the
+    function falls back to converting the file to text and delegating to
+    :func:`llm_financial_summary`.
+    """
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        from app.utils.file_to_text import file_bytes_to_text
+
+        text = file_bytes_to_text(filename, data)
+        return llm_financial_summary({"raw_text": text})
+
+    try:  # pragma: no cover - network call
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key)
+        upload = client.files.create(file=data, purpose="assistants", filename=filename)
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Be precise, numeric, and concise. Output plain text only.",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Review the attached document and return three plain-text "
+                                "sections: Summary, Financial analysis, Financial insights."
+                            ),
+                        },
+                        {"type": "input_file", "file_id": upload.id},
+                    ],
+                },
+            ],
+        )
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        text = ""
+
+    if not text:
+        from app.utils.file_to_text import file_bytes_to_text
+
+        raw_text = file_bytes_to_text(filename, data)
+        return llm_financial_summary({"raw_text": raw_text})
+
     blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
     out = {"summary_text": text, "analysis_text": "", "insights_text": ""}
     if len(blocks) >= 3:
