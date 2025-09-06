@@ -401,6 +401,22 @@
         setStatus('Done');
         return;
       }
+      const textOnly = (
+        data.kind === 'insights' || data.mode === 'insights' ||
+        data.summary_text ||
+        (data.analysis && (data.analysis.text || data.analysis)) ||
+        (data.insights && (data.insights.text || data.insights))
+      );
+      if (textOnly) {
+        hardRemoveWorkbookInsights();
+        renderSummaryAnalysisInsightsOnly({
+          summary_text: data.summary_text || '',
+          analysis: (data.analysis && (data.analysis.text || data.analysis)) || data.economic_analysis || '',
+          insights: (data.insights && (data.insights.text || data.insights)) || ''
+        });
+        setStatus('Done');
+        return;
+      }
 
       if (data.insights) {
         renderInsights(data.insights);
@@ -494,6 +510,30 @@
     }
     appendTable('Top vendors by spend', (ins.tables && ins.tables['workbook::vendor_totals']) || [], ['vendor','total_sar']);
     appendTable('Largest bid spreads', (ins.tables && ins.tables['workbook::vendor_spreads']) || [], ['description','min_vendor','min_unit_sar','max_vendor','max_unit_sar','spread_pct']);
+  }
+
+  function renderSummaryAnalysisInsightsOnly(payload) {
+    const root = ensureSection('report-root', '');
+    const { summary_text, analysis = {}, insights = {} } = payload || {};
+    const analysisText = typeof analysis === 'string' ? analysis : (analysis && analysis.text) || '';
+    const insightsText = typeof insights === 'string' ? insights : (insights && insights.text) || '';
+    const blocks = []
+      .concat(summary_text ? ['Summary', summary_text] : [])
+      .concat(analysisText ? ['Financial analysis', analysisText] : [])
+      .concat(insightsText ? ['Financial insights', insightsText] : []);
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.textContent = blocks.join('\n\n');
+    root.appendChild(card);
+  }
+
+  function hardRemoveWorkbookInsights(){
+    const sels = ['#workbook_insights','.workbook-insights','[data-role="workbook-insights"]'];
+    sels.forEach(s => document.querySelectorAll(s).forEach(n => n.remove()));
+    Array.from(document.querySelectorAll('section,div')).forEach(n => {
+      const txt = (n.textContent || '').trim();
+      if (/^Workbook Insights/i.test(txt)) n.remove();
+    });
   }
 </script>
 
