@@ -2,109 +2,54 @@ name: deploy
 on:
   push:
     branches: [ main ]
-    # Only trigger when meaningful files change
-    paths:
-      - 'src/**'
-      - 'backend/**'
-      - 'server/**'
-      - 'app/**'
-      - 'azure/**'
-      - 'infra/**'
-      - 'Dockerfile'
-      - 'requirements*.txt'
-      - 'pyproject.toml'
-      - 'poetry.lock'
-      - '.github/workflows/deploy.yml'
-  workflow_dispatch: {}   # allow manual runs
-
-permissions:
-  id-token: write
-  contents: read
-
-concurrency:
-  group: oaktree-dev-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      app: ${{ steps.filter.outputs.app }}
-      force: ${{ steps.force.outputs.force }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            app:
-              - 'src/**'
-              - 'backend/**'
-              - 'server/**'
-              - 'app/**'
-              - 'azure/**'
-              - 'infra/**'
-              - 'Dockerfile'
-              - 'requirements*.txt'
-              - 'pyproject.toml'
-              - 'poetry.lock'
-              - '.github/workflows/deploy.yml'
-      - id: force
-        run: |
-          msg="${{ github.event.head_commit.message }}"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "$msg" == *"[deploy]"* ]] || [[ "${{ startsWith(github.ref, 'refs/tags/deploy-') }}" == "true" ]]; then
-            echo "force=true" >> $GITHUB_OUTPUT
-          else
-            echo "force=false" >> $GITHUB_OUTPUT
-          fi
-
-  build:
-    needs: changes
-    if: needs.changes.outputs.app == 'true' || needs.changes.outputs.force == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      - run: pip install -r requirements.txt
-      - name: Package artifact
-        run: |
-          # Create a clean zip of the repo contents (tracked + untracked),
-          # excluding CI files and junk; no self-recursive copy.
-          zip -qry app.zip . \
-            -x "./.git/*" "./.github/*" "./app.zip" "**/__pycache__/*" "*.pyc" ".venv/*" "venv/*" "node_modules/*"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app
-          path: app.zip
-
   deploy:
-    needs: build
-    if: needs.changes.outputs.app == 'true' || needs.changes.outputs.force == 'true'
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: app
-          path: .
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      RG: oaktree-variance-dev-rg
+      APP: oaktree-variance-dev
+      API_PATH: .
 
-      - name: Azure OIDC login
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show backend contents
+        run: |
+          echo "Backend path: $API_PATH"
+          ls -la "$API_PATH"
+
+      - name: Validate backend layout
+        run: |
+          test -f "$API_PATH/requirements.txt" || { echo "requirements.txt not found under $API_PATH"; exit 1; }
+          test -f "$API_PATH/app.py" -o -f "$API_PATH/main.py" || { echo "app.py/main.py not found under $API_PATH"; exit 1; }
+
+      - name: Build deployable artifact (zip root = backend)
+        run: |
+          cd "$API_PATH"
+          zip -r ../app.zip .
+          cd -
+          unzip -l app.zip | head -n 20
+
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Verify Azure context
+      - name: Deploy zip to Azure Web App
         run: |
-          az account show --query "{subscription:id, tenant:tenantId}" --output table
+          az webapp deploy \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --type zip \
+            --src-path app.zip \
+            --clean true
 
-      - name: Deploy zip to Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: oaktree-variance-dev
-          package: app.zip
+      - name: Show site URL
+        run: az webapp show -g "$RG" -n "$APP" --query defaultHostName -o tsv
