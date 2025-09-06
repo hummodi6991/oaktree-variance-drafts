@@ -2,13 +2,9 @@ import os
 from typing import Dict, Any, Tuple
 
 from app.schemas import GenerationMeta, TokenUsage
+from openai_client_helper import build_client
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-
-def _openai_client():
-    from openai import OpenAI  # requires openai>=1.0
-    return OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 def llm_financial_summary(payload: Dict[str, Any], *, local_only: bool = False) -> Tuple[Dict[str, str], GenerationMeta]:
     """
@@ -46,24 +42,24 @@ Raw text (possibly noisy, use prudently):
 
     if not local_only:
         try:  # pragma: no cover - network call
-            client = _openai_client()
-            msg = client.chat.completions.create(
+            client = build_client()
+            msg = client.responses.create(
                 model=OPENAI_MODEL,
                 temperature=0.2,
-                messages=[
+                input=[
                     {"role": "system", "content": "Be precise, numeric, and concise. Output plain text only."},
                     {"role": "user", "content": prompt},
                 ],
             )
-            text = (msg.choices[0].message.content or "").strip()
+            text = (msg.output_text or "").strip()
             usage = getattr(msg, "usage", None)
             meta = GenerationMeta(
                 llm_used=True,
                 provider="OpenAI",
                 model=OPENAI_MODEL,
                 token_usage=TokenUsage(
-                    prompt_tokens=getattr(usage, "prompt_tokens", None),
-                    completion_tokens=getattr(usage, "completion_tokens", None),
+                    prompt_tokens=getattr(usage, "input_tokens", None),
+                    completion_tokens=getattr(usage, "output_tokens", None),
                     total_tokens=getattr(usage, "total_tokens", None),
                 ),
                 forced_local=False,
@@ -154,13 +150,11 @@ def llm_financial_summary_file(filename: str, data: bytes, *, local_only: bool =
         return llm_financial_summary({"raw_text": text}, local_only=True)
 
     try:  # pragma: no cover - network call
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key)
+        client = build_client()
         upload = client.files.create(file=data, purpose="assistants", filename=filename)
-        resp = client.chat.completions.create(
+        resp = client.responses.create(
             model=OPENAI_MODEL,
-            messages=[
+            input=[
                 {
                     "role": "system",
                     "content": "Be precise, numeric, and concise. Output plain text only.",
@@ -180,15 +174,15 @@ def llm_financial_summary_file(filename: str, data: bytes, *, local_only: bool =
                 },
             ],
         )
-        text = (resp.choices[0].message.content or "").strip()
+        text = (resp.output_text or "").strip()
         usage = getattr(resp, "usage", None)
         meta = GenerationMeta(
             llm_used=True,
             provider="OpenAI",
             model=OPENAI_MODEL,
             token_usage=TokenUsage(
-                prompt_tokens=getattr(usage, "prompt_tokens", None),
-                completion_tokens=getattr(usage, "completion_tokens", None),
+                prompt_tokens=getattr(usage, "input_tokens", None),
+                completion_tokens=getattr(usage, "output_tokens", None),
                 total_tokens=getattr(usage, "total_tokens", None),
             ),
             forced_local=False,
