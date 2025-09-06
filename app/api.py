@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import UploadFile, File, Form
 
 from app.main import app
@@ -8,7 +9,7 @@ from app.services.singlefile import process_single_file
 @app.post("/single/generate")
 async def single_generate(file: UploadFile = File(...), bilingual: bool = Form(True)):
     """Return LLM-generated summary/analysis/insights for any single file upload."""
-    b = await file.read()
-    res = process_single_file(file.filename, b)
+    data = await file.read()
+    res = await asyncio.to_thread(process_single_file, file.filename or "upload.bin", data)
     return {"kind": "insights", **res}
 
