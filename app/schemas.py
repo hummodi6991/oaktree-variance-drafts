@@ -73,8 +73,13 @@ class SummaryResponse(BaseModel):
     message: str
     insights: Dict[str, Any] = Field(default_factory=dict)
 
+# Envelope used by /drafts to return the list together with metadata
+class DraftsEnvelope(BaseModel):
+    variances: List[DraftResponse]
+    _meta: Optional[Dict[str, Any]] = None
 
-DraftsOrSummary = Union[List[DraftResponse], SummaryResponse]
+# Endpoints may return either the wrapped list of drafts or a summary
+DraftsOrSummary = Union[DraftsEnvelope, SummaryResponse]
 
 
 class TokenUsage(BaseModel):
