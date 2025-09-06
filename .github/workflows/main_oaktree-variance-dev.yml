@@ -68,6 +68,16 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_6ABBBFAF71E44ACD95FCEFD7F302CC3C }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_46714C56CE4D4F9781F5CDD3F65A87D4 }}
 
+      - name: Who am I in Azure?
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "== Account =="
+          az account show --query "{name:name,id:id,tenantId:tenantId}" -o table
+          echo "== Service principal behind AZURE_CLIENT_ID =="
+          az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --query "{displayName:displayName,appId:appId,objectId:id}" -o table
+
       - name: Validate Azure inputs
         shell: bash
         run: |
