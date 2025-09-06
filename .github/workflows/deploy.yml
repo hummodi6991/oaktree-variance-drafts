@@ -2,6 +2,9 @@ name: deploy
 on:
   push:
     branches: [ main ]
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -110,23 +113,20 @@ jobs:
             --name "$AZURE_WEBAPP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false
-
-      # 6) Zip deploy with a safe retry (handles 409 lock)
-      - name: Zip deploy attempt 1
-        id: deploy1
-        uses: azure/webapps-deploy@v3
-        continue-on-error: true
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          package: app.zip
-
-      - name: Retry if first deploy failed
-        if: steps.deploy1.outcome == 'failure'
-        run: sleep 20
-
-      - name: Zip deploy attempt 2
-        if: steps.deploy1.outcome == 'failure'
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          package: app.zip
+      - name: Deploy via Azure CLI (zip)
+        shell: bash
+        env:
+          ZIP_PATH: app.zip
+        run: |
+          set -euo pipefail
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "::error::Zip artifact not found at $ZIP_PATH"; ls -la; exit 1
+          fi
+          echo "Deploying $ZIP_PATH to $AZURE_WEBAPP_NAME in $AZURE_RESOURCE_GROUP"
+          az webapp deploy \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --src-path "$ZIP_PATH" \
+            --type zip \
+            --async false \
+            --restart true

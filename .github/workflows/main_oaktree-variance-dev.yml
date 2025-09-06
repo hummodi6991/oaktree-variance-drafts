@@ -9,6 +9,9 @@ on:
     branches:
       - main
   workflow_dispatch:
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -61,6 +64,12 @@ jobs:
           name: python-app
           path: ${{ github.workspace }}/python-app
 
+      - name: Zip artifact for deploy
+        shell: bash
+        run: |
+          cd "${{ github.workspace }}/python-app"
+          zip -qry ../artifact.zip .
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -89,13 +98,21 @@ jobs:
           done
           echo "Using RG=$AZURE_RESOURCE_GROUP, APP=$AZURE_WEBAPP_NAME"
           az group show -n "$AZURE_RESOURCE_GROUP" -o table
-
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v2
-        id: deploy-to-webapp
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          slot-name: 'Production'
-          package: ${{ github.workspace }}/python-app
-          startup-command: 'gunicorn -c gunicorn.conf.py app.main:app'
+      - name: Deploy via Azure CLI (zip)
+        shell: bash
+        env:
+          ZIP_PATH: artifact.zip
+        run: |
+          set -euo pipefail
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "::error::Zip artifact not found at $ZIP_PATH"; ls -la; exit 1
+          fi
+          echo "Deploying $ZIP_PATH to $AZURE_WEBAPP_NAME in $AZURE_RESOURCE_GROUP"
+          az webapp deploy \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --src-path "$ZIP_PATH" \
+            --type zip \
+            --async false \
+            --restart true
 
