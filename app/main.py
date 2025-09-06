@@ -1048,7 +1048,7 @@ async def drafts_upload(
 async def singlefile_report(file: UploadFile = File(...)) -> Dict[str, Any]:
     """Return summary/analysis/insights for a single uploaded file."""
     data = await file.read()
-    res = process_single_file(file.filename or "upload.bin", data)
+    res = await asyncio.to_thread(process_single_file, file.filename or "upload.bin", data)
     return {"kind": "insights", **res}
 
 
