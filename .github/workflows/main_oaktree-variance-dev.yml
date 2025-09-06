@@ -52,7 +52,7 @@ jobs:
       contents: read #This is required for actions/checkout
     env:
       AZURE_WEBAPP_NAME: oaktree-variance-dev
-      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      AZURE_RESOURCE_GROUP: oaktree-variance-rg
 
     steps:
       - name: Download artifact from build job
@@ -67,6 +67,18 @@ jobs:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_B5CCBBB1A0AD4D16B5FAB94C75816D05 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_6ABBBFAF71E44ACD95FCEFD7F302CC3C }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_46714C56CE4D4F9781F5CDD3F65A87D4 }}
+
+      - name: Validate Azure inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in AZURE_WEBAPP_NAME AZURE_RESOURCE_GROUP; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::Missing $v"; exit 1
+            fi
+          done
+          echo "Using RG=$AZURE_RESOURCE_GROUP, APP=$AZURE_WEBAPP_NAME"
+          az group show -n "$AZURE_RESOURCE_GROUP" -o table
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v2
