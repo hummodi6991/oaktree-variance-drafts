@@ -51,7 +51,7 @@ from .schemas import (
 )
 from .pipeline import generate_drafts
 from .services.csv_loader import parse_tabular
-from app.services.singlefile import process_single_file, draft_bilingual_procurement_card
+from app.services.singlefile import process_single_file
 from .llm.extract_from_text import extract_items_via_llm
 from app.parsers.single_file import analyze_single_file
 from app.services.insights import compute_procurement_insights, summarize_procurement_lines
@@ -1046,19 +1046,10 @@ async def drafts_upload(
 
 @app.post("/singlefile/report")
 async def singlefile_report(file: UploadFile = File(...)) -> Dict[str, Any]:
-    """
-    If Budget+Actual found -> {"mode":"variance","variances":[...], "insights": {...}}
-    Else -> {"mode":"summary","items":[...,"drafts":[{en,ar},...] ]}
-    """
+    """Return summary/analysis/insights for a single uploaded file."""
     data = await file.read()
     res = process_single_file(file.filename or "upload.bin", data)
-    if res.get("mode") == "summary":
-        items = res.get("items", [])
-        res["drafts"] = [
-            draft_bilingual_procurement_card(it, "Uploaded procurement file")
-            for it in items
-        ]
-    return res
+    return {"kind": "insights", **res}
 
 
 @app.post("/singlefile/analyze")
@@ -1067,12 +1058,7 @@ async def analyze_single_file_endpoint(
     bilingual: bool = Form(True),
     no_speculation: bool = Form(True),
 ) -> Dict[str, Any]:
-    """
-    Strict single-file analysis:
-    - If we detect budget/actual pairs => produce variance_insights.
-    - Otherwise => produce procurement_summary cards only.
-    - Never invent numbers; only paraphrase descriptions if bilingual.
-    """
+    """Analyze a single file by delegating to ChatGPT."""
     data = await file.read()
     return await analyze_single_file(
         data,
