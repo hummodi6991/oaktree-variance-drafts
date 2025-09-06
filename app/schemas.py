@@ -76,6 +76,20 @@ class SummaryResponse(BaseModel):
 
 DraftsOrSummary = Union[List[DraftResponse], SummaryResponse]
 
+
+class TokenUsage(BaseModel):
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+
+
+class GenerationMeta(BaseModel):
+    llm_used: bool
+    provider: Optional[Literal["OpenAI"]] = None
+    model: Optional[str] = None
+    token_usage: Optional[TokenUsage] = None
+    forced_local: Optional[bool] = None
+
 class ProcurementItem(BaseModel):
     """Lightweight summary card for single-file procurement uploads."""
 

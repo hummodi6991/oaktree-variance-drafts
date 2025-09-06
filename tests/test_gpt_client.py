@@ -36,11 +36,12 @@ def test_generate_draft_timeout(monkeypatch):
         vendors=["Vendor"],
     )
     cfg = ConfigModel()
-    en, ar = generate_draft(v, cfg)
+    en, ar, meta = generate_draft(v, cfg)
     assert "variance" in en
     assert DummyOpenAI.last_kwargs["timeout"] == 1
     assert DummyOpenAI.last_kwargs["max_retries"] == 5
     assert ar  # bilingual fallback text
+    assert meta.llm_used is False
     os.environ.pop("OPENAI_API_KEY")
     os.environ.pop("OPENAI_TIMEOUT")
     os.environ.pop("OPENAI_MAX_RETRIES")

@@ -13,6 +13,7 @@ from .schemas import (
     DraftResponse,
 )
 from .gpt_client import generate_draft
+from .schemas import GenerationMeta, TokenUsage
 
 def ym_to_range(period: str) -> Tuple[datetime, datetime]:
     start = datetime.strptime(period + "-01", "%Y-%m-%d")
@@ -237,7 +238,9 @@ def _noop_progress(pct: int, msg: str = "") -> None:
 def generate_drafts(
     req: DraftRequest,
     progress_cb: Callable[[int, str], None] = _noop_progress,
-) -> Any:
+    *,
+    force_local: bool = False,
+) -> Tuple[Any, GenerationMeta]:
     """High-level helper to build drafts from CSV-derived models."""
     progress_cb(10, "Loading & validating input")
     cat_lu = build_category_lookup(req.category_map)
@@ -259,13 +262,17 @@ def generate_drafts(
             progress_cb(40, "Summarizing budget/actuals")
             summary = _summarize_generic_rows(rows, label="budget_actuals")
             summary["message"] = "No budget/actual pairs detected — showing summary."
-            return summary
+            return summary, GenerationMeta(llm_used=False, forced_local=force_local)
         if req.change_orders:
             progress_cb(40, "Summarizing change orders")
-            return _summarize_change_orders(req.change_orders, cat_lu)
+            return _summarize_change_orders(req.change_orders, cat_lu), GenerationMeta(
+                llm_used=False, forced_local=force_local
+            )
         if getattr(req, "raw_rows", None):
             progress_cb(40, "Summarizing uploaded rows")
-            return _summarize_generic_rows(req.raw_rows, label="single_file")
+            return _summarize_generic_rows(req.raw_rows, label="single_file"), GenerationMeta(
+                llm_used=False, forced_local=force_local
+            )
         if getattr(req, "vendor_map", None):
             progress_cb(40, "Summarizing vendor map")
             rows = [
@@ -274,7 +281,9 @@ def generate_drafts(
                 )
                 for v in req.vendor_map
             ]
-            return _summarize_generic_rows(rows, label="vendor_map")
+            return _summarize_generic_rows(rows, label="vendor_map"), GenerationMeta(
+                llm_used=False, forced_local=force_local
+            )
         if getattr(req, "category_map", None):
             progress_cb(40, "Summarizing category map")
             rows = [
@@ -283,12 +292,17 @@ def generate_drafts(
                 )
                 for v in req.category_map
             ]
-            return _summarize_generic_rows(rows, label="category_map")
-        return {
-            "kind": "summary",
-            "message": "No budget/actuals detected and no tabular data available to summarize.",
-            "insights": {},
-        }
+            return _summarize_generic_rows(rows, label="category_map"), GenerationMeta(
+                llm_used=False, forced_local=force_local
+            )
+        return (
+            {
+                "kind": "summary",
+                "message": "No budget/actuals detected and no tabular data available to summarize.",
+                "insights": {},
+            },
+            GenerationMeta(llm_used=False, forced_local=force_local),
+        )
 
     progress_cb(55, "Preparing EN prompt")
     material = filter_materiality(items, req.config)
@@ -302,14 +316,33 @@ def generate_drafts(
         progress_cb(60, "Summarizing budget/actuals")
         summary = _summarize_generic_rows(rows, label="budget_actuals")
         summary["message"] = "No variances met materiality — showing summary."
-        return summary
+        return summary, GenerationMeta(llm_used=False, forced_local=force_local)
     out: List[DraftResponse] = []
+    meta = GenerationMeta(llm_used=False, forced_local=force_local)
+    usage_totals = TokenUsage()
     for v in material:
         progress_cb(75, "Calling model (EN)")
-        en, ar = generate_draft(v, req.config)
+        en, ar, m = generate_draft(v, req.config, local_only=force_local)
         progress_cb(85, "Calling model (AR)")
         out.append(DraftResponse(variance=v, draft_en=en, draft_ar=ar or None))
+        if m.llm_used:
+            meta.llm_used = True
+            meta.provider = m.provider
+            meta.model = m.model
+            if m.token_usage:
+                usage_totals.prompt_tokens = (usage_totals.prompt_tokens or 0) + (
+                    m.token_usage.prompt_tokens or 0
+                )
+                usage_totals.completion_tokens = (usage_totals.completion_tokens or 0) + (
+                    m.token_usage.completion_tokens or 0
+                )
+                usage_totals.total_tokens = (usage_totals.total_tokens or 0) + (
+                    m.token_usage.total_tokens or 0
+                )
+
+    if meta.llm_used:
+        meta.token_usage = usage_totals
 
     progress_cb(95, "Finalizing result")
     progress_cb(100, "Done")
-    return out
+    return out, meta
