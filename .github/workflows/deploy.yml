@@ -9,6 +9,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      AZURE_WEBAPP_NAME: oaktree-variance-dev
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
 
     steps:
       - name: Checkout
@@ -79,11 +82,11 @@ jobs:
         shell: bash
         run: |
           az webapp deployment source delete \
-            --name oaktree-variance-dev \
-            --resource-group <YOUR_RESOURCE_GROUP> || true
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" || true
           az webapp config appsettings set \
-            --name oaktree-variance-dev \
-            --resource-group <YOUR_RESOURCE_GROUP> \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
             --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false
 
       # 6) Zip deploy with a safe retry (handles 409 lock)
@@ -92,7 +95,7 @@ jobs:
         uses: azure/webapps-deploy@v3
         continue-on-error: true
         with:
-          app-name: oaktree-variance-dev
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           package: app.zip
 
       - name: Retry if first deploy failed
@@ -103,5 +106,5 @@ jobs:
         if: steps.deploy1.outcome == 'failure'
         uses: azure/webapps-deploy@v3
         with:
-          app-name: oaktree-variance-dev
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           package: app.zip

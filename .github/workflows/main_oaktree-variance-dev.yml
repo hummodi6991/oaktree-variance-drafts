@@ -50,6 +50,9 @@ jobs:
     permissions:
       id-token: write #This is required for requesting the JWT
       contents: read #This is required for actions/checkout
+    env:
+      AZURE_WEBAPP_NAME: oaktree-variance-dev
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
 
     steps:
       - name: Download artifact from build job
@@ -69,7 +72,7 @@ jobs:
         uses: azure/webapps-deploy@v2
         id: deploy-to-webapp
         with:
-          app-name: oaktree-variance-dev
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
           slot-name: 'Production'
           package: ${{ github.workspace }}/python-app
           startup-command: 'gunicorn -c gunicorn.conf.py app.main:app'
