@@ -8,7 +8,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     concurrency:
-      group: deploy-${{ github.workflow }}-${{ env.AZURE_WEBAPP_NAME }}-${{ github.ref }}
+      group: deploy-${{ github.workflow }}-oaktree-variance-dev-${{ github.ref }}
       cancel-in-progress: true
     permissions:
       id-token: write
@@ -111,6 +111,7 @@ jobs:
           APP_URL: https://oaktree-variance-dev.azurewebsites.net/
         run: |
           set -euo pipefail
+          echo "Waiting for site to come up..."
           for i in {1..36}; do  # ~6 minutes
             code=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL" || true)
             if [ "$code" = "200" ] || [ "$code" = "302" ]; then
@@ -120,5 +121,8 @@ jobs:
             sleep 10
           done
           echo "::error::Site did not return 200/302 in time. Recent logs:"
-          az webapp log tail --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME" --timeout 120 || true
+          az webapp log tail \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --timeout 120 || true
           exit 1
