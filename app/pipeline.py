@@ -250,7 +250,9 @@ def generate_drafts(
     else:
         # No budget/actual pairs: return summary+insights
         rows = [
-            r.dict() if hasattr(r, "dict") else dict(r)
+            r.model_dump() if hasattr(r, "model_dump") else (
+                r.dict() if hasattr(r, "dict") else dict(r)
+            )
             for r in (getattr(req, "budget_actuals", []) or [])
         ]
         if rows:
@@ -266,11 +268,21 @@ def generate_drafts(
             return _summarize_generic_rows(req.raw_rows, label="single_file")
         if getattr(req, "vendor_map", None):
             progress_cb(40, "Summarizing vendor map")
-            rows = [v.dict() if hasattr(v, "dict") else dict(v) for v in req.vendor_map]
+            rows = [
+                v.model_dump() if hasattr(v, "model_dump") else (
+                    v.dict() if hasattr(v, "dict") else dict(v)
+                )
+                for v in req.vendor_map
+            ]
             return _summarize_generic_rows(rows, label="vendor_map")
         if getattr(req, "category_map", None):
             progress_cb(40, "Summarizing category map")
-            rows = [v.dict() if hasattr(v, "dict") else dict(v) for v in req.category_map]
+            rows = [
+                v.model_dump() if hasattr(v, "model_dump") else (
+                    v.dict() if hasattr(v, "dict") else dict(v)
+                )
+                for v in req.category_map
+            ]
             return _summarize_generic_rows(rows, label="category_map")
         return {
             "kind": "summary",
@@ -281,7 +293,12 @@ def generate_drafts(
     progress_cb(55, "Preparing EN prompt")
     material = filter_materiality(items, req.config)
     if not material:
-        rows = [r.dict() if hasattr(r, "dict") else dict(r) for r in req.budget_actuals]
+        rows = [
+            r.model_dump() if hasattr(r, "model_dump") else (
+                r.dict() if hasattr(r, "dict") else dict(r)
+            )
+            for r in req.budget_actuals
+        ]
         progress_cb(60, "Summarizing budget/actuals")
         summary = _summarize_generic_rows(rows, label="budget_actuals")
         summary["message"] = "No variances met materiality — showing summary."
