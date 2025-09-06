@@ -20,59 +20,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1) Detect backend folder (tries common names, then falls back to repo root)
-      - name: Detect backend directory
-        id: detect
+      - name: Create deployable source zip
         shell: bash
         run: |
           set -euo pipefail
-          CANDS=("backend" "server" "api" "app" ".")
-          PICK=""
-          for d in "${CANDS[@]}"; do
-            if [ -e "$d/requirements.txt" ] || [ -e "$d/pyproject.toml" ]; then
-              PICK="$d"
-              break
-            fi
-          done
-          if [ -z "$PICK" ]; then
-            # last-chance: if src/ has python files, use repo root anyway
-            PICK="."
-          fi
-          echo "APP_DIR=$PICK" | tee -a "$GITHUB_ENV"
-          echo "Using APP_DIR='$PICK'"
+          zip -r app.zip . \
+            -x ".git/*" ".github/*" "*/__pycache__/*" "*.pyc" "node_modules/*"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: app.zip
 
-      - name: Show APP_DIR contents (non-fatal)
-        shell: bash
-        run: |
-          set +e
-          echo "APP_DIR: $APP_DIR"
-          ls -la "$APP_DIR" || true
-
-      # 2) (Optional) validate we have a Python app
-      - name: Validate backend layout
-        shell: bash
-        run: |
-          test -e "$APP_DIR/requirements.txt" -o -e "$APP_DIR/pyproject.toml" || {
-            echo "::error::No requirements.txt or pyproject.toml found in $APP_DIR"; exit 1; }
-
-      # 3) Build the artifact (zip root = backend dir)
-      - name: Build deployable artifact
-        shell: bash
-        run: |
-          cd "$APP_DIR"
-          pipx install build >/dev/null 2>&1 || true
-          # Create a clean zip, excluding junk
-          if [ "$APP_DIR" = "." ]; then
-            ZIP_PATH="app.zip"
-          else
-            ZIP_PATH="../app.zip"
-          fi
-          zip -qry "$ZIP_PATH" . \
-            -x "./.git/*" "./.github/*" "./app.zip" "**/__pycache__/*" "*.pyc" ".venv/*" "venv/*" "node_modules/*"
-          cd -
-          ls -lh app.zip
-
-      # 4) Azure login with OIDC
+      # Azure login with OIDC
       - name: Azure OIDC login
         uses: azure/login@v2
         with:
@@ -102,42 +62,23 @@ jobs:
           echo "Using RG=$AZURE_RESOURCE_GROUP, APP=$AZURE_WEBAPP_NAME"
           az group show -n "$AZURE_RESOURCE_GROUP" -o table
 
-      # 5) Make sure Deployment Center is detached & Oryx rebuild is off (idempotent)
-      - name: Prepare Web App for zip deploy
-        shell: bash
-        run: |
-          az webapp deployment source delete \
-            --name "$AZURE_WEBAPP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" || true
-          az webapp config appsettings set \
-            --name "$AZURE_WEBAPP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false
       - name: AppService config for Python
         shell: bash
         run: |
           set -euo pipefail
-          # Make sure we're on the Python built-in image and let Oryx build
           az webapp config set \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_WEBAPP_NAME" \
-            --linux-fx-version "Python|3.11"
+            --linux-fx-version "Python|3.11" \
+            --always-on true
           az webapp config appsettings set \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_WEBAPP_NAME" \
-            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-                       WEBSITE_RUN_FROM_PACKAGE=1
-          # Remove any bad custom startup (let Oryx generate one)
+            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true WEBSITE_RUN_FROM_PACKAGE=1
           az webapp config set \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_WEBAPP_NAME" \
             --startup-file ""
-          # Keep the app warm so restarts are faster
-          az webapp config set \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --always-on true
-          # Ensure app logs are on (so we can see failures)
           az webapp log config \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_WEBAPP_NAME" \
@@ -147,12 +88,14 @@ jobs:
       - name: Deploy via Azure CLI (zip)
         shell: bash
         env:
-          ZIP_PATH: app.zip
+          ZIP_PATH: ./app.zip
         run: |
           set -euo pipefail
           if [ ! -f "$ZIP_PATH" ]; then
             echo "::error::Zip artifact not found at $ZIP_PATH"; ls -la; exit 1
           fi
+          # start log tail in background for up to 10 minutes
+          ( az webapp log tail --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME" --timeout 600 || true ) &
           echo "Deploying $ZIP_PATH to $AZURE_WEBAPP_NAME in $AZURE_RESOURCE_GROUP"
           az webapp deploy \
             --resource-group "$AZURE_RESOURCE_GROUP" \
@@ -167,8 +110,7 @@ jobs:
           APP_URL: https://oaktree-variance-dev.azurewebsites.net/
         run: |
           set -euo pipefail
-          echo "Waiting for site to come up..."
-          for i in {1..36}; do   # ~6 minutes
+          for i in {1..36}; do  # ~6 minutes
             code=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL" || true)
             if [ "$code" = "200" ] || [ "$code" = "302" ]; then
               echo "Site is up with HTTP $code"; exit 0
@@ -176,9 +118,6 @@ jobs:
             echo "Still starting... ($i/36) HTTP $code"
             sleep 10
           done
-          echo "::warning::Site did not return 200/302 in time. Tailing logs for clues..."
-          az webapp log tail \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --timeout 120 || true
+          echo "::error::Site did not return 200/302 in time. Recent logs:"
+          az webapp log tail --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME" --timeout 120 || true
           exit 1
