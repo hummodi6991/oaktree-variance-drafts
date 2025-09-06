@@ -1,17 +1,18 @@
 FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 WORKDIR /app
-
-# Install Python deps from the project's manifest (includes pandas, openpyxl, pdf libs, etc.)
+# Install system deps if you need them; keep minimal
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+# Install Python deps
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
-
-# Copy source after deps for better Docker layer caching
-COPY app /app/app
-COPY README.md /app/README.md
-COPY gunicorn.conf.py /app/gunicorn.conf.py
-
-EXPOSE 8000
-ENV PYTHONUNBUFFERED=1
-
-# Use gunicorn in containers (keeps parity with provided config)
-CMD [ "gunicorn", "-c", "gunicorn.conf.py", "app.main:app" ]
+RUN pip install -r requirements.txt && pip install gunicorn
+# App code
+COPY . /app
+# App Service passes $PORT; expose a default dev port for local runs
+ENV PORT=8000
+# Configure your entrypoint via APP_MODULE (defaults to app:app). Example: "main:app" or "projectname.wsgi"
+ENV APP_MODULE=app:app
+# Start via gunicorn; override APP_MODULE in App Settings if your module is different
+CMD ["sh", "-c", "gunicorn -b 0.0.0.0:${PORT} ${APP_MODULE}"]
