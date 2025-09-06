@@ -9,10 +9,11 @@ jobs:
     permissions:
       id-token: write
       contents: read
+
     env:
-      RG: oaktree-variance-dev-rg
-      APP: oaktree-variance-dev
-      API_PATH: .
+      RG: ${RG}
+      APP: ${APP}
+      API_PATH: ${API_PATH}
 
     steps:
       - name: Checkout
@@ -20,17 +21,34 @@ jobs:
 
       - name: Show backend contents
         run: |
-          echo "Backend path: $API_PATH"
-          ls -la "$API_PATH"
+          echo "Backend path: \$API_PATH"
+          ls -la "\$API_PATH"
 
+      # Only require requirements.txt so Oryx detects Python.
       - name: Validate backend layout
         run: |
-          test -f "$API_PATH/requirements.txt" || { echo "requirements.txt not found under $API_PATH"; exit 1; }
-          test -f "$API_PATH/app.py" -o -f "$API_PATH/main.py" || { echo "app.py/main.py not found under $API_PATH"; exit 1; }
+          test -f "\$API_PATH/requirements.txt" || { echo "requirements.txt not found under \$API_PATH"; exit 1; }
+
+      # Try to auto-detect a FastAPI module and prepare a startup command.
+      - name: Detect FastAPI app and set startup command
+        id: startup
+        run: |
+          set -e
+          MOD_FILE="$(grep -RIl --include='*.py' 'FastAPI(' "\$API_PATH" | head -n1 || true)"
+          if [ -n "\$MOD_FILE" ]; then
+            MOD_NOEXT="${MOD_FILE%.py}"
+            MOD_REL="${MOD_NOEXT#${API_PATH}/}"
+            MOD="${MOD_REL//\//.}"
+            CMD="gunicorn -k uvicorn.workers.UvicornWorker ${MOD}:app"
+            echo "Detected module: ${MOD}"
+            echo "STARTUP_CMD=${CMD}" >> "\$GITHUB_ENV"
+          else
+            echo "No FastAPI module auto-detected; leaving startup unchanged."
+          fi
 
       - name: Build deployable artifact (zip root = backend)
         run: |
-          cd "$API_PATH"
+          cd "\$API_PATH"
           zip -r ../app.zip .
           cd -
           unzip -l app.zip | head -n 20
@@ -45,11 +63,17 @@ jobs:
       - name: Deploy zip to Azure Web App
         run: |
           az webapp deploy \
-            --resource-group "$RG" \
-            --name "$APP" \
+            --resource-group "\$RG" \
+            --name "\$APP" \
             --type zip \
             --src-path app.zip \
             --clean true
 
+      - name: Apply startup command if detected
+        if: env.STARTUP_CMD != ''
+        run: |
+          echo "Setting startup command: \$STARTUP_CMD"
+          az webapp config set -g "\$RG" -n "\$APP" --startup-file "\$STARTUP_CMD"
+
       - name: Show site URL
-        run: az webapp show -g "$RG" -n "$APP" --query defaultHostName -o tsv
+        run: az webapp show -g "\$RG" -n "\$APP" --query defaultHostName -o tsv
