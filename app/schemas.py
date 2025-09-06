@@ -1,7 +1,7 @@
 
 """Pydantic data models for the Variance Drafts service."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any, Dict, Union
 from typing_extensions import Literal
 
@@ -76,7 +76,8 @@ class SummaryResponse(BaseModel):
 # Envelope used by /drafts to return the list together with metadata
 class DraftsEnvelope(BaseModel):
     variances: List[DraftResponse]
-    _meta: Optional[Dict[str, Any]] = None
+    meta: Optional[Dict[str, Any]] = Field(default=None, alias="_meta")
+    model_config = ConfigDict(protected_namespaces=())
 
 # Endpoints may return either the wrapped list of drafts or a summary
 DraftsOrSummary = Union[DraftsEnvelope, SummaryResponse]

@@ -9,6 +9,7 @@ from .prompt_contract import (
     build_user_prompt,
     build_arabic_instruction,
 )
+from openai_client_helper import build_client
 
 
 def _fallback_text(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str]:
@@ -44,26 +45,23 @@ def generate_draft(v: VarianceItem, cfg: ConfigModel, *, local_only: bool = Fals
         return en, ar, GenerationMeta(llm_used=False, forced_local=local_only)
 
     try:  # pragma: no cover - network call
-        from openai import OpenAI
-
         timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
-        retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
         model = os.getenv("OPENAI_MODEL", "gpt-5.1-mini")
-        client = OpenAI(api_key=api_key, timeout=timeout, max_retries=retries)
+        client = build_client()
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt + ("\n\n" + ar_instr if ar_instr else "")},
         ]
-        resp = client.chat.completions.create(
+        resp = client.responses.create(
             model=model,
-            messages=messages,  # type: ignore[arg-type]
+            input=messages,
             timeout=timeout,
         )
-        text = (resp.choices[0].message.content or "").strip()
+        text = (resp.output_text or "").strip()
         usage = getattr(resp, "usage", None)
         tu = TokenUsage(
-            prompt_tokens=getattr(usage, "prompt_tokens", None),
-            completion_tokens=getattr(usage, "completion_tokens", None),
+            prompt_tokens=getattr(usage, "input_tokens", None),
+            completion_tokens=getattr(usage, "output_tokens", None),
             total_tokens=getattr(usage, "total_tokens", None),
         )
         meta = GenerationMeta(
@@ -95,11 +93,8 @@ def summarize_financials(summary: Dict[str, Any], analysis: Dict[str, Any]) -> s
     if not api_key:
         return fallback
     try:
-        from openai import OpenAI
-
         timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
-        retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
-        client = OpenAI(api_key=api_key, timeout=timeout, max_retries=retries)
+        client = build_client()
         prompt = (
             "You are a financial analyst. Using the data below, write a concise "
             "summary highlighting key financial insights.\n\n"
@@ -110,12 +105,12 @@ def summarize_financials(summary: Dict[str, Any], analysis: Dict[str, Any]) -> s
             {"role": "system", "content": "You are a helpful financial analysis assistant."},
             {"role": "user", "content": prompt},
         ]
-        resp = client.chat.completions.create(
+        resp = client.responses.create(
             model=os.getenv("OPENAI_MODEL", "gpt-5.1-mini"),
-            messages=messages,  # type: ignore[arg-type]
+            input=messages,
             timeout=timeout,
         )
-        text = (resp.choices[0].message.content or "").strip()
+        text = (resp.output_text or "").strip()
         return text or fallback
     except Exception:
         return fallback

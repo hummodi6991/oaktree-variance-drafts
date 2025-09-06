@@ -5,24 +5,22 @@ from app.schemas import VarianceItem, ConfigModel
 class DummyOpenAI:
     last_kwargs = None
 
-    def __init__(self, api_key: str, timeout: int, max_retries: int):
+    def __init__(self, api_key=None, timeout=None, max_retries=None, base_url=None):
         DummyOpenAI.last_kwargs = {
             "api_key": api_key,
             "timeout": timeout,
             "max_retries": max_retries,
         }
-        class _Chat:
-            class _Completions:
-                def create(self, *args, **kwargs):
-                    raise TimeoutError("boom")
-            completions = _Completions()
-        self.chat = _Chat()
+        class _Responses:
+            def create(self, *args, **kwargs):
+                raise TimeoutError("boom")
+        self.responses = _Responses()
 
 def test_generate_draft_timeout(monkeypatch):
     os.environ["OPENAI_API_KEY"] = "sk-test"
     os.environ["OPENAI_TIMEOUT"] = "1"
     os.environ["OPENAI_MAX_RETRIES"] = "5"
-    monkeypatch.setattr("openai.OpenAI", DummyOpenAI)
+    monkeypatch.setattr("openai_client_helper.OpenAI", DummyOpenAI)
 
     v = VarianceItem(
         project_id="P1",

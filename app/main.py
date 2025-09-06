@@ -56,6 +56,7 @@ from .llm.extract_from_text import extract_items_via_llm
 from app.parsers.single_file import analyze_single_file
 from app.services.insights import compute_procurement_insights, summarize_procurement_lines
 from app.gpt_client import summarize_financials
+from openai_client_helper import build_client
 from app.routers import drafts as drafts_router
 from app.utils.local import is_local_only
 
@@ -116,15 +117,25 @@ def diag_health(request: Request):
 @app.get("/diag/openai")
 def diag_openai(request: Request):
     key = os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
+    ok = bool(key)
+    err: str | None = None
+    if ok:
+        try:
+            client = build_client()
+            client.responses.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                input="ping",
+            )
+        except Exception as e:  # pragma: no cover - diagnostics
+            ok = False
+            err = repr(e)
     return {
-        "ok": bool(key),
+        "ok": ok,
         "request_id": request.state.request_id,
         "key_prefix": _mask(key),
         "endpoint": os.getenv("OPENAI_BASE_URL") or "https://api.openai.com",
         "model": os.getenv("OPENAI_MODEL"),
-        "hint": None
-        if key
-        else "Set OPENAI_API_KEY (or AZURE_OPENAI_API_KEY) in App Settings.",
+        "error": err,
     }
 
 
@@ -540,7 +551,6 @@ async def extract_freeform(
     appropriate pipeline.
     """
     # LLM-only mode: ignore local_only header; fail if LLM fails
-    local_only = False
     all_rows: List[Dict[str, Any]] = []
     mode = "change_orders"
     for f in files:
@@ -575,7 +585,6 @@ async def extract_freeform(
                         "vendor_name": None,
                     })
             if not rows:
-                from fastapi import HTTPException
                 raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
         else:
             df = _df_from_bytes(name, data)
@@ -604,7 +613,6 @@ async def extract_freeform(
                             "vendor_name": None,
                         })
                 if not rows:
-                    from fastapi import HTTPException
                     raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
         all_rows.extend(rows)
     filtered = [
@@ -810,21 +818,26 @@ async def upload(
                 if not rows:
                     from app.utils.retries import retry_iter
                     out: List[Dict[str, Any]] = []
-                    for it in retry_iter(_extract_rows_via_llm, text):
-                        out.append({
-                            "project_id": None,
-                            "linked_cost_code": None,
-                            "description": it.get("description"),
-                            "file_link": None,
-                            "co_id": it.get("co_id"),
-                            "date": None,
-                            "amount_sar": it.get("amount_sar"),
-                            "vendor_name": None,
-                        })
+                    try:
+                        for it in retry_iter(_extract_rows_via_llm, text):
+                            out.append(
+                                {
+                                    "project_id": None,
+                                    "linked_cost_code": None,
+                                    "description": it.get("description"),
+                                    "file_link": None,
+                                    "co_id": it.get("co_id"),
+                                    "date": None,
+                                    "amount_sar": it.get("amount_sar"),
+                                    "vendor_name": None,
+                                }
+                            )
+                    except Exception:
+                        out = []
                     rows = out
                 if not rows:
-                    from fastapi import HTTPException
-                    raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
+                    summary = textwrap.shorten((text or "").strip(), width=200, placeholder="...")
+                    return {"mode": "summary", "summary": summary}
         filtered = [
             r for r in rows if any(v is not None and str(v).strip() != "" for v in r.values())
         ]
@@ -974,7 +987,7 @@ async def upload(
         meta.forced_local,
     )
     if isinstance(result, list):
-        return {"variances": result, "_meta": meta.model_dump()}
+        return result
     result["_meta"] = meta.model_dump()
     return result
 
@@ -1113,16 +1126,17 @@ async def singlefile_report(request: Request, file: UploadFile = File(...)) -> D
     """Return summary/analysis/insights for a single uploaded file."""
     data = await file.read()
     local_only = is_local_only(request)
-    res, meta = await asyncio.to_thread(
+    res = await asyncio.to_thread(
         process_single_file, file.filename or "upload.bin", data, local_only=local_only
     )
+    meta = res.get("_meta", {})
     logger.info(
         "singlefile_report llm_used=%s model=%s forced_local=%s",
-        meta.llm_used,
-        meta.model,
-        meta.forced_local,
+        meta.get("llm_used"),
+        meta.get("model"),
+        meta.get("forced_local"),
     )
-    return {"kind": "insights", **res, "_meta": meta.model_dump()}
+    return {"kind": "insights", **res}
 
 
 @app.post("/singlefile/analyze")
@@ -1135,20 +1149,20 @@ async def analyze_single_file_endpoint(
     """Analyze a single file by delegating to ChatGPT."""
     data = await file.read()
     local_only = is_local_only(request)
-    res, meta = await analyze_single_file(
+    res = await analyze_single_file(
         data,
         file.filename,
         bilingual=bilingual,
         no_speculation=no_speculation,
         local_only=local_only,
     )
+    meta = res.get("_meta", {})
     logger.info(
         "singlefile_analyze llm_used=%s model=%s forced_local=%s",
-        meta.llm_used,
-        meta.model,
-        meta.forced_local,
+        meta.get("llm_used"),
+        meta.get("model"),
+        meta.get("forced_local"),
     )
-    res["_meta"] = meta.model_dump()
     return res
 
 
@@ -1206,20 +1220,23 @@ async def generate_from_file_async(request: Request, file: UploadFile = File(...
         t0 = time.time()
         try:
             jobs_put(job_id, status="parsing", stage="parsing")
-            result, meta = await asyncio.to_thread(process_single_file, name, raw, local_only=local_only)
+            result = await asyncio.to_thread(
+                process_single_file, name, raw, local_only=local_only
+            )
+            meta = result.get("_meta", {})
             jobs_put(
                 job_id,
                 ok=True,
                 status="done",
                 stage="done",
                 timings_ms={"total": int((time.time() - t0) * 1000)},
-                payload={**result, "_meta": meta.model_dump()},
+                payload=result,
             )
             logger.info(
                 "singlefile_generate_async llm_used=%s model=%s forced_local=%s",
-                meta.llm_used,
-                meta.model,
-                meta.forced_local,
+                meta.get("llm_used"),
+                meta.get("model"),
+                meta.get("forced_local"),
             )
         except ValueError as ve:
             jobs_put(
