@@ -10,7 +10,9 @@ def test_from_file_no_variance():
     assert r.status_code == 200
     j = r.json()
     assert j["kind"] == "insights"
-    assert "summary_text" in j
+    assert "summary_text" in j and j["summary_text"].strip()
     assert "analysis_text" in j and isinstance(j["analysis_text"], str)
+    assert j["analysis_text"].strip()
     assert "insights_text" in j and isinstance(j["insights_text"], str)
+    assert j["insights_text"].strip()
     assert "analysis" not in j and "insights" not in j
