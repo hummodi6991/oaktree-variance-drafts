@@ -34,6 +34,7 @@ def test_create_drafts_endpoint():
     resp = client.post('/drafts', json=payload, headers={"x-api-key": "testkey"})
     assert resp.status_code == 200
     data = resp.json()
-    assert isinstance(data, list)
-    assert len(data) == 2
-    assert all('draft_en' in item for item in data)
+    assert isinstance(data.get('variances'), list)
+    assert len(data['variances']) == 2
+    assert all('draft_en' in item for item in data['variances'])
+    assert '_meta' in data

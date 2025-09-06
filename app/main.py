@@ -57,6 +57,7 @@ from app.parsers.single_file import analyze_single_file
 from app.services.insights import compute_procurement_insights, summarize_procurement_lines
 from app.gpt_client import summarize_financials
 from app.routers import drafts as drafts_router
+from app.utils.local import is_local_only
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
 
@@ -657,7 +658,7 @@ def _set_job(job_id: str, **kw):
 
 @app.post("/drafts/async", response_model=JobStatus, dependencies=deps)
 async def create_drafts_async(
-    req: DraftRequest, background_tasks: BackgroundTasks
+    request: Request, req: DraftRequest, background_tasks: BackgroundTasks
 ):
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
@@ -667,6 +668,8 @@ async def create_drafts_async(
         "message": "Queued",
         "result": None,
     }
+
+    local_only = is_local_only(request)
 
     def run_job():
         try:
@@ -679,13 +682,23 @@ async def create_drafts_async(
                     message=msg or jobs[job_id].get("message"),
                 )
 
-            result = generate_drafts(req, progress_cb=cb)
+            result, meta = generate_drafts(req, progress_cb=cb, force_local=local_only)
+            payload = {
+                "variances": result,
+                "_meta": meta.model_dump(),
+            } if isinstance(result, list) else {**result, "_meta": meta.model_dump()}
             _set_job(
                 job_id,
                 status="done",
                 progress=100,
                 message="Completed",
-                result=result,
+                result=payload,
+            )
+            logger.info(
+                "drafts_async llm_used=%s model=%s forced_local=%s",
+                meta.llm_used,
+                meta.model,
+                meta.forced_local,
             )
         except Exception as e:  # pragma: no cover - error path
             _set_job(job_id, status="error", message=str(e))
@@ -707,13 +720,25 @@ def ceo_ui():
     return FileResponse("app/templates/ui.html")
 
 @app.post("/drafts", response_model=DraftsOrSummary, dependencies=deps)
-def create_drafts(req: DraftRequest):
+def create_drafts(request: Request, req: DraftRequest):
     """Create EN/AR variance explanation drafts."""
-    return generate_drafts(req)
+    local_only = is_local_only(request)
+    result, meta = generate_drafts(req, force_local=local_only)
+    logger.info(
+        "drafts llm_used=%s model=%s forced_local=%s",
+        meta.llm_used,
+        meta.model,
+        meta.forced_local,
+    )
+    if isinstance(result, list):
+        return {"variances": result, "_meta": meta.model_dump()}
+    result["_meta"] = meta.model_dump()
+    return result
 
 
 @app.post("/upload", include_in_schema=False)
 async def upload(
+    request: Request,
     budget_actuals: UploadFile | None = File(None),
     change_orders: UploadFile | None = File(None),
     vendor_map: UploadFile | None = File(None),
@@ -725,6 +750,8 @@ async def upload(
     enforce_no_speculation: bool = Form(True),
     api_key: Optional[str] = Form(None),
 ):
+    local_only = is_local_only(request)
+
     # Optional simple API key check using the same header logic
     from app.schemas import (
         BudgetActualRow,
@@ -836,7 +863,13 @@ async def upload(
                         category_map=[],
                         config=cfg,
                     )
-                    drafts = generate_drafts(req)
+                    drafts, meta = generate_drafts(req, force_local=local_only)
+                    logger.info(
+                        "upload llm_used=%s model=%s forced_local=%s",
+                        meta.llm_used,
+                        meta.model,
+                        meta.forced_local,
+                    )
 
                 unpaired_summary = {
                     "total_budget_sar": sum(
@@ -849,6 +882,7 @@ async def upload(
                 return {
                     "mode": mode,
                     "drafts": [d.model_dump() for d in drafts],
+                    "_meta": meta.model_dump(),
                     "paired_count": len(paired),
                     "unpaired_count": len(unpaired),
                     "unpaired_rows": unpaired,
@@ -912,7 +946,16 @@ async def upload(
         config=cfg,
     )
 
-    result = generate_drafts(req)
+    result, meta = generate_drafts(req, force_local=local_only)
+    logger.info(
+        "upload llm_used=%s model=%s forced_local=%s",
+        meta.llm_used,
+        meta.model,
+        meta.forced_local,
+    )
+    if isinstance(result, list):
+        return {"variances": result, "_meta": meta.model_dump()}
+    result["_meta"] = meta.model_dump()
     return result
 
 
@@ -1002,6 +1045,7 @@ def _build_payload(
 
 @app.post("/drafts/upload", response_model=DraftsOrSummary)
 async def drafts_upload(
+    request: Request,
     budget_actuals: UploadFile = File(..., description="Budget–Actuals CSV/XLS/XLSX"),
     change_orders: UploadFile = File(..., description="Change Orders CSV/XLS/XLSX"),
     vendor_map: UploadFile = File(..., description="Vendor Map CSV/XLS/XLSX"),
@@ -1034,7 +1078,7 @@ async def drafts_upload(
         raise HTTPException(status_code=400, detail=f"Failed to parse files: {e}")
 
     try:
-        return create_drafts(req)
+        return create_drafts(request, req)
     except HTTPException:
         raise
     except Exception as e:
@@ -1045,27 +1089,47 @@ async def drafts_upload(
 
 
 @app.post("/singlefile/report")
-async def singlefile_report(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def singlefile_report(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
     """Return summary/analysis/insights for a single uploaded file."""
     data = await file.read()
-    res = await asyncio.to_thread(process_single_file, file.filename or "upload.bin", data)
-    return {"kind": "insights", **res}
+    local_only = is_local_only(request)
+    res, meta = await asyncio.to_thread(
+        process_single_file, file.filename or "upload.bin", data, local_only=local_only
+    )
+    logger.info(
+        "singlefile_report llm_used=%s model=%s forced_local=%s",
+        meta.llm_used,
+        meta.model,
+        meta.forced_local,
+    )
+    return {"kind": "insights", **res, "_meta": meta.model_dump()}
 
 
 @app.post("/singlefile/analyze")
 async def analyze_single_file_endpoint(
+    request: Request,
     file: UploadFile = File(...),
     bilingual: bool = Form(True),
     no_speculation: bool = Form(True),
 ) -> Dict[str, Any]:
     """Analyze a single file by delegating to ChatGPT."""
     data = await file.read()
-    return await analyze_single_file(
+    local_only = is_local_only(request)
+    res, meta = await analyze_single_file(
         data,
         file.filename,
         bilingual=bilingual,
         no_speculation=no_speculation,
+        local_only=local_only,
     )
+    logger.info(
+        "singlefile_analyze llm_used=%s model=%s forced_local=%s",
+        meta.llm_used,
+        meta.model,
+        meta.forced_local,
+    )
+    res["_meta"] = meta.model_dump()
+    return res
 
 
 # ---------------- In-memory job store (lightweight) ------------------------
@@ -1116,18 +1180,26 @@ async def generate_from_file_async(request: Request, file: UploadFile = File(...
         stage="queued",
     )
 
+    local_only = is_local_only(request)
+
     async def _worker():
         t0 = time.time()
         try:
             jobs_put(job_id, status="parsing", stage="parsing")
-            result = await asyncio.to_thread(process_single_file, name, raw)
+            result, meta = await asyncio.to_thread(process_single_file, name, raw, local_only=local_only)
             jobs_put(
                 job_id,
                 ok=True,
                 status="done",
                 stage="done",
                 timings_ms={"total": int((time.time() - t0) * 1000)},
-                payload=result,
+                payload={**result, "_meta": meta.model_dump()},
+            )
+            logger.info(
+                "singlefile_generate_async llm_used=%s model=%s forced_local=%s",
+                meta.llm_used,
+                meta.model,
+                meta.forced_local,
             )
         except ValueError as ve:
             jobs_put(

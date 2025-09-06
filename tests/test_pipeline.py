@@ -62,7 +62,8 @@ def test_generate_drafts_change_orders_only():
         category_map=category_map,
         config=ConfigModel(materiality_pct=0, materiality_amount_sar=0),
     )
-    summary = generate_drafts(req)
+    summary, meta = generate_drafts(req)
+    assert meta.llm_used is False
     assert summary["kind"] == "summary"
     assert summary["insights"]["total_change_orders"] == 1
     assert summary["insights"]["total_amount_sar"] == 150000.0
@@ -86,6 +87,7 @@ def test_generate_drafts_no_budget_actual_pairs_returns_summary():
         category_map=[],
         config=ConfigModel(materiality_pct=0, materiality_amount_sar=0),
     )
-    summary = generate_drafts(req)
+    summary, meta = generate_drafts(req)
+    assert meta.llm_used is False
     assert summary["kind"] == "summary"
     assert summary["insights"].get("row_count") == 1

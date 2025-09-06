@@ -91,12 +91,14 @@
           <div class="row">
             <label><input id="optBilingual" type="checkbox" checked /> Bilingual</label>
             <label><input id="optNoSpec" type="checkbox" checked /> No speculation</label>
+            <label><input id="optLocalOnly" type="checkbox" /> Local-only mode</label>
           </div>
         </div>
       </div>
 
       <div class="row" style="margin-bottom:8px">
         <button id="btnGen" class="btn">Generate</button>
+        <span id="modeBadge" class="pill" style="display:none"></span>
       <div id="status" class="status">Idle</div>
       </div>
       <div class="bar"><div id="bar" style="width:0%"></div></div>
@@ -156,6 +158,24 @@
     setStatus(msg, 'err');
     showErrorDetails(reason);
   });
+
+  const MODE_TOOLTIP = "If AI-assisted, extracted text and key figures are sent to OpenAI to draft content. 'No speculation' enforces fact-bound output.";
+  function updateModeBadge(meta) {
+    const badge = $('modeBadge');
+    if (!badge) return;
+    badge.title = MODE_TOOLTIP;
+    if (meta && meta.llm_used) {
+      const model = meta.model ? ` (${meta.model})` : '';
+      const prov = meta.provider || 'OpenAI';
+      badge.textContent = `AI-assisted • ${prov}${model}`;
+      badge.style.display = 'inline-block';
+    } else if (meta) {
+      badge.textContent = 'Local-only (no external model)';
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
 
   function normalizeKeys(row) {
     const out = {};
@@ -377,7 +397,8 @@
       fd.append('bilingual', $('optBilingual').checked ? 'true' : 'false');
       fd.append('no_speculation', $('optNoSpec').checked ? 'true' : 'false');
       setStatus('Calling API…'); setBar(60); $('btnSingle').disabled = true;
-      const resp = await fetch('/drafts/from-file', { method: 'POST', body: fd });
+      const headers = $('optLocalOnly').checked ? { 'x-local-only': 'true' } : {};
+      const resp = await fetch('/drafts/from-file', { method: 'POST', body: fd, headers });
       if (!resp.ok) {
         const txt = await resp.text();
         setStatus('API error: ' + resp.status + ' ' + resp.statusText + '\n' + txt, 'err');
@@ -387,6 +408,7 @@
         setBar(0); $('btnSingle').disabled = false; return;
       }
       const result = await resp.json();
+      updateModeBadge(result._meta);
       if (result && result.error) {
         setStatus(result.error, 'err'); setBar(0); $('btnSingle').disabled = false;
         $('result').textContent = result.error;
@@ -468,9 +490,11 @@
       }
 
       setStatus('Calling API…'); setBar(60);
+      const headers = { 'Content-Type':'application/json' };
+      if ($('optLocalOnly').checked) headers['x-local-only'] = 'true';
       const resp = await fetch('/drafts', {
         method:'POST',
-        headers:{ 'Content-Type':'application/json' },
+        headers,
         body: JSON.stringify(payload)
       });
 
@@ -484,6 +508,7 @@
       }
 
       const data = await resp.json();
+      updateModeBadge(data._meta);
       setStatus('Done', 'ok'); setBar(100);
       renderResult(data);
     } catch (err) {

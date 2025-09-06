@@ -3,7 +3,7 @@ import os
 import json
 from typing import Tuple, Dict, Any
 
-from .schemas import VarianceItem, ConfigModel
+from .schemas import VarianceItem, ConfigModel, GenerationMeta, TokenUsage
 from .prompt_contract import (
     SYSTEM_PROMPT,
     build_user_prompt,
@@ -28,7 +28,7 @@ def _fallback_text(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str]:
     return en, ar
 
 
-def generate_draft(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str]:
+def generate_draft(v: VarianceItem, cfg: ConfigModel, *, local_only: bool = False) -> Tuple[str, str, GenerationMeta]:
     """Generate an evidence-based variance explanation using ChatGPT.
 
     The helper delegates to the OpenAI ChatGPT API when an API key is
@@ -39,31 +39,47 @@ def generate_draft(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str]:
     user_prompt = build_user_prompt(v, cfg)
     ar_instr = build_arabic_instruction() if cfg.bilingual else ""
 
-    if not api_key:
-        return _fallback_text(v, cfg)
+    if local_only or not api_key:
+        en, ar = _fallback_text(v, cfg)
+        return en, ar, GenerationMeta(llm_used=False, forced_local=local_only)
 
-    try:
+    try:  # pragma: no cover - network call
         from openai import OpenAI
 
         timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
         retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
+        model = os.getenv("OPENAI_MODEL", "gpt-5.1-mini")
         client = OpenAI(api_key=api_key, timeout=timeout, max_retries=retries)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt + ("\n\n" + ar_instr if ar_instr else "")},
         ]
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-5.1-mini"),
+            model=model,
             messages=messages,  # type: ignore[arg-type]
             timeout=timeout,
         )
         text = (resp.choices[0].message.content or "").strip()
+        usage = getattr(resp, "usage", None)
+        tu = TokenUsage(
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
+        )
+        meta = GenerationMeta(
+            llm_used=True,
+            provider="OpenAI",
+            model=model,
+            token_usage=tu,
+            forced_local=False,
+        )
         if cfg.bilingual and "\n\n" in text:
             en, ar = text.split("\n\n", 1)
-            return en.strip(), ar.strip()
-        return text, ""
+            return en.strip(), ar.strip(), meta
+        return text, "", meta
     except Exception:
-        return _fallback_text(v, cfg)
+        en, ar = _fallback_text(v, cfg)
+        return en, ar, GenerationMeta(llm_used=False, forced_local=False)
 
 
 def summarize_financials(summary: Dict[str, Any], analysis: Dict[str, Any]) -> str:
