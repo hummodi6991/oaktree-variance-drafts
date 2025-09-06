@@ -56,7 +56,12 @@ jobs:
           cd "$APP_DIR"
           pipx install build >/dev/null 2>&1 || true
           # Create a clean zip, excluding junk
-          zip -qry ../app.zip . \
+          if [ "$APP_DIR" = "." ]; then
+            ZIP_PATH="app.zip"
+          else
+            ZIP_PATH="../app.zip"
+          fi
+          zip -qry "$ZIP_PATH" . \
             -x "./.git/*" "./.github/*" "./app.zip" "**/__pycache__/*" "*.pyc" ".venv/*" "venv/*" "node_modules/*"
           cd -
           ls -lh app.zip
