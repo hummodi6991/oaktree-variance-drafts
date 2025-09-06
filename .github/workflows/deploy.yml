@@ -10,70 +10,93 @@ jobs:
       id-token: write
       contents: read
 
-    env:
-      RG: ${RG}
-      APP: ${APP}
-      API_PATH: ${API_PATH}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show backend contents
+      # 1) Detect backend folder (tries common names, then falls back to repo root)
+      - name: Detect backend directory
+        id: detect
+        shell: bash
         run: |
-          echo "Backend path: \$API_PATH"
-          ls -la "\$API_PATH"
-
-      # Only require requirements.txt so Oryx detects Python.
-      - name: Validate backend layout
-        run: |
-          test -f "\$API_PATH/requirements.txt" || { echo "requirements.txt not found under \$API_PATH"; exit 1; }
-
-      # Try to auto-detect a FastAPI module and prepare a startup command.
-      - name: Detect FastAPI app and set startup command
-        id: startup
-        run: |
-          set -e
-          MOD_FILE="$(grep -RIl --include='*.py' 'FastAPI(' "\$API_PATH" | head -n1 || true)"
-          if [ -n "\$MOD_FILE" ]; then
-            MOD_NOEXT="${MOD_FILE%.py}"
-            MOD_REL="${MOD_NOEXT#${API_PATH}/}"
-            MOD="${MOD_REL//\//.}"
-            CMD="gunicorn -k uvicorn.workers.UvicornWorker ${MOD}:app"
-            echo "Detected module: ${MOD}"
-            echo "STARTUP_CMD=${CMD}" >> "\$GITHUB_ENV"
-          else
-            echo "No FastAPI module auto-detected; leaving startup unchanged."
+          set -euo pipefail
+          CANDS=("backend" "server" "api" "app" ".")
+          PICK=""
+          for d in "${CANDS[@]}"; do
+            if [ -e "$d/requirements.txt" ] || [ -e "$d/pyproject.toml" ]; then
+              PICK="$d"
+              break
+            fi
+          done
+          if [ -z "$PICK" ]; then
+            # last-chance: if src/ has python files, use repo root anyway
+            PICK="."
           fi
+          echo "APP_DIR=$PICK" | tee -a "$GITHUB_ENV"
+          echo "Using APP_DIR='$PICK'"
 
-      - name: Build deployable artifact (zip root = backend)
+      - name: Show APP_DIR contents (non-fatal)
+        shell: bash
         run: |
-          cd "\$API_PATH"
-          zip -r ../app.zip .
-          cd -
-          unzip -l app.zip | head -n 20
+          set +e
+          echo "APP_DIR: $APP_DIR"
+          ls -la "$APP_DIR" || true
 
-      - name: Azure login (OIDC)
+      # 2) (Optional) validate we have a Python app
+      - name: Validate backend layout
+        shell: bash
+        run: |
+          test -e "$APP_DIR/requirements.txt" -o -e "$APP_DIR/pyproject.toml" || {
+            echo "::error::No requirements.txt or pyproject.toml found in $APP_DIR"; exit 1; }
+
+      # 3) Build the artifact (zip root = backend dir)
+      - name: Build deployable artifact
+        shell: bash
+        run: |
+          cd "$APP_DIR"
+          pipx install build >/dev/null 2>&1 || true
+          # Create a clean zip, excluding junk
+          zip -qry ../app.zip . \
+            -x "./.git/*" "./.github/*" "./app.zip" "**/__pycache__/*" "*.pyc" ".venv/*" "venv/*" "node_modules/*"
+          cd -
+          ls -lh app.zip
+
+      # 4) Azure login with OIDC
+      - name: Azure OIDC login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy zip to Azure Web App
+      # 5) Make sure Deployment Center is detached & Oryx rebuild is off (idempotent)
+      - name: Prepare Web App for zip deploy
+        shell: bash
         run: |
-          az webapp deploy \
-            --resource-group "\$RG" \
-            --name "\$APP" \
-            --type zip \
-            --src-path app.zip \
-            --clean true
+          az webapp deployment source delete \
+            --name oaktree-variance-dev \
+            --resource-group <YOUR_RESOURCE_GROUP> || true
+          az webapp config appsettings set \
+            --name oaktree-variance-dev \
+            --resource-group <YOUR_RESOURCE_GROUP> \
+            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false
 
-      - name: Apply startup command if detected
-        if: env.STARTUP_CMD != ''
-        run: |
-          echo "Setting startup command: \$STARTUP_CMD"
-          az webapp config set -g "\$RG" -n "\$APP" --startup-file "\$STARTUP_CMD"
+      # 6) Zip deploy with a safe retry (handles 409 lock)
+      - name: Zip deploy attempt 1
+        id: deploy1
+        uses: azure/webapps-deploy@v3
+        continue-on-error: true
+        with:
+          app-name: oaktree-variance-dev
+          package: app.zip
 
-      - name: Show site URL
-        run: az webapp show -g "\$RG" -n "\$APP" --query defaultHostName -o tsv
+      - name: Retry if first deploy failed
+        if: steps.deploy1.outcome == 'failure'
+        run: sleep 20
+
+      - name: Zip deploy attempt 2
+        if: steps.deploy1.outcome == 'failure'
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: oaktree-variance-dev
+          package: app.zip
