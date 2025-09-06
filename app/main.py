@@ -56,6 +56,7 @@ from .llm.extract_from_text import extract_items_via_llm
 from app.parsers.single_file import analyze_single_file
 from app.services.insights import compute_procurement_insights, summarize_procurement_lines
 from app.gpt_client import summarize_financials
+from openai_client_helper import build_client
 from app.routers import drafts as drafts_router
 from app.utils.local import is_local_only
 
@@ -116,15 +117,25 @@ def diag_health(request: Request):
 @app.get("/diag/openai")
 def diag_openai(request: Request):
     key = os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
+    ok = bool(key)
+    err: str | None = None
+    if ok:
+        try:
+            client = build_client()
+            client.responses.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                input="ping",
+            )
+        except Exception as e:  # pragma: no cover - diagnostics
+            ok = False
+            err = repr(e)
     return {
-        "ok": bool(key),
+        "ok": ok,
         "request_id": request.state.request_id,
         "key_prefix": _mask(key),
         "endpoint": os.getenv("OPENAI_BASE_URL") or "https://api.openai.com",
         "model": os.getenv("OPENAI_MODEL"),
-        "hint": None
-        if key
-        else "Set OPENAI_API_KEY (or AZURE_OPENAI_API_KEY) in App Settings.",
+        "error": err,
     }
 
 
@@ -540,7 +551,6 @@ async def extract_freeform(
     appropriate pipeline.
     """
     # LLM-only mode: ignore local_only header; fail if LLM fails
-    local_only = False
     all_rows: List[Dict[str, Any]] = []
     mode = "change_orders"
     for f in files:
@@ -575,7 +585,6 @@ async def extract_freeform(
                         "vendor_name": None,
                     })
             if not rows:
-                from fastapi import HTTPException
                 raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
         else:
             df = _df_from_bytes(name, data)
@@ -604,7 +613,6 @@ async def extract_freeform(
                             "vendor_name": None,
                         })
                 if not rows:
-                    from fastapi import HTTPException
                     raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
         all_rows.extend(rows)
     filtered = [
@@ -823,7 +831,6 @@ async def upload(
                         })
                     rows = out
                 if not rows:
-                    from fastapi import HTTPException
                     raise HTTPException(status_code=502, detail="LLM extraction produced no rows.")
         filtered = [
             r for r in rows if any(v is not None and str(v).strip() != "" for v in r.values())

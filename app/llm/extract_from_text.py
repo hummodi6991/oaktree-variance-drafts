@@ -6,10 +6,9 @@ Only used as a fallback when deterministic parsing is incomplete.
 from typing import List, Dict, Any
 import os
 import json
-from openai import OpenAI
+from openai_client_helper import build_client
 
-_api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=_api_key) if _api_key else None
+client = build_client() if os.getenv("OPENAI_API_KEY") else None
 
 SYSTEM = (
   "You extract JSON ONLY from the provided text. "
