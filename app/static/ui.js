@@ -32,10 +32,9 @@ async function generateFromSingleFile() {
     // Text-only: summary, analysis, insights (number-supported). No cards/tables/diagnostics.
     hardRemoveWorkbookInsights();
     renderSummaryAnalysisInsightsOnly({
-      summary: data.summary || {},
-      analysis: (data.analysis && (data.analysis.text || data.analysis)) || data.economic_analysis || {},
-      insights: (data.insights && (data.insights.text || data.insights)) || {},
-      summary_text: data.summary_text || ''
+      summary_text: data.summary_text || '',
+      analysis_text: data.analysis_text || '',
+      insights_text: data.insights_text || ''
     });
     setStatus && setStatus('Done');
   } else {
@@ -47,15 +46,13 @@ async function generateFromSingleFile() {
 function renderSummaryAnalysisInsightsOnly(payload) {
   const box = document.getElementById('result_box');
   box.innerHTML = '';
-  const { summary_text, analysis = {}, insights = {} } = payload || {};
+  const { summary_text = '', analysis_text = '', insights_text = '' } = payload || {};
 
   // Render EXACTLY three text blocks (nothing else)
-  const analysisText = typeof analysis === 'string' ? analysis : (analysis && analysis.text) || '';
-  const insightsText = typeof insights === 'string' ? insights : (insights && insights.text) || '';
   const blocks = []
     .concat(summary_text ? ["Summary", summary_text] : [])
-    .concat(analysisText ? ["Financial analysis", analysisText] : [])
-    .concat(insightsText ? ["Financial insights", insightsText] : []);
+    .concat(analysis_text ? ["Financial analysis", analysis_text] : [])
+    .concat(insights_text ? ["Financial insights", insights_text] : []);
   box.textContent = blocks.join("\n\n");
 }
 

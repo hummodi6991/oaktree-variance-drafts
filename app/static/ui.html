@@ -403,16 +403,14 @@
       }
       const textOnly = (
         data.kind === 'insights' || data.mode === 'insights' ||
-        data.summary_text ||
-        (data.analysis && (data.analysis.text || data.analysis)) ||
-        (data.insights && (data.insights.text || data.insights))
+        data.summary_text || data.analysis_text || data.insights_text
       );
       if (textOnly) {
         hardRemoveWorkbookInsights();
         renderSummaryAnalysisInsightsOnly({
           summary_text: data.summary_text || '',
-          analysis: (data.analysis && (data.analysis.text || data.analysis)) || data.economic_analysis || '',
-          insights: (data.insights && (data.insights.text || data.insights)) || ''
+          analysis_text: data.analysis_text || '',
+          insights_text: data.insights_text || ''
         });
         setStatus('Done');
         return;
@@ -514,13 +512,11 @@
 
   function renderSummaryAnalysisInsightsOnly(payload) {
     const root = ensureSection('report-root', '');
-    const { summary_text, analysis = {}, insights = {} } = payload || {};
-    const analysisText = typeof analysis === 'string' ? analysis : (analysis && analysis.text) || '';
-    const insightsText = typeof insights === 'string' ? insights : (insights && insights.text) || '';
+    const { summary_text = '', analysis_text = '', insights_text = '' } = payload || {};
     const blocks = []
       .concat(summary_text ? ['Summary', summary_text] : [])
-      .concat(analysisText ? ['Financial analysis', analysisText] : [])
-      .concat(insightsText ? ['Financial insights', insightsText] : []);
+      .concat(analysis_text ? ['Financial analysis', analysis_text] : [])
+      .concat(insights_text ? ['Financial insights', insights_text] : []);
     const card = document.createElement('div');
     card.className = 'card';
     card.textContent = blocks.join('\n\n');

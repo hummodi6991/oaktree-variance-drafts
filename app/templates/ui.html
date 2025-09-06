@@ -608,15 +608,13 @@
     }
     const textOnly = (
       data.kind === 'insights' || data.mode === 'insights' ||
-      data.summary_text ||
-      (data.analysis && (data.analysis.text || data.analysis)) ||
-      (data.insights && (data.insights.text || data.insights))
+      data.summary_text || data.analysis_text || data.insights_text
     );
     if (textOnly) {
       renderSummaryAnalysisInsightsOnly({
         summary_text: data.summary_text || '',
-        analysis: (data.analysis && (data.analysis.text || data.analysis)) || data.economic_analysis || '',
-        insights: (data.insights && (data.insights.text || data.insights)) || ''
+        analysis_text: data.analysis_text || '',
+        insights_text: data.insights_text || ''
       });
       return;
     }
@@ -692,13 +690,11 @@
   function renderSummaryAnalysisInsightsOnly(payload) {
     const box = $('result');
     box.innerHTML = '';
-    const { summary_text, analysis = {}, insights = {} } = payload || {};
-    const analysisText = typeof analysis === 'string' ? analysis : (analysis && analysis.text) || '';
-    const insightsText = typeof insights === 'string' ? insights : (insights && insights.text) || '';
+    const { summary_text = '', analysis_text = '', insights_text = '' } = payload || {};
     const sections = []
       .concat(summary_text ? `<h3>Summary</h3><p>${escapeHtml(summary_text)}</p>` : [])
-      .concat(analysisText ? `<h3>Financial analysis</h3><p>${escapeHtml(analysisText)}</p>` : [])
-      .concat(insightsText ? `<h3>Financial insights</h3><p>${escapeHtml(insightsText)}</p>` : []);
+      .concat(analysis_text ? `<h3>Financial analysis</h3><p>${escapeHtml(analysis_text)}</p>` : [])
+      .concat(insights_text ? `<h3>Financial insights</h3><p>${escapeHtml(insights_text)}</p>` : []);
     const wrap = document.createElement('section');
     wrap.className = 'report__card';
     wrap.innerHTML = sections.join('');
