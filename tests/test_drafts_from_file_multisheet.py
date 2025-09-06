@@ -37,5 +37,6 @@ def test_drafts_from_file_returns_insights():
     data = resp.json()
     assert data["kind"] == "insights"
     assert "summary_text" in data
-    assert "analysis" in data and isinstance(data["analysis"], dict)
-    assert "insights" in data and isinstance(data["insights"], dict)
+    assert "analysis_text" in data and isinstance(data["analysis_text"], str)
+    assert "insights_text" in data and isinstance(data["insights_text"], str)
+    assert "analysis" not in data and "insights" not in data

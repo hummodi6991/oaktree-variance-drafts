@@ -11,4 +11,4 @@ async def analyze_single_file(
 ) -> Dict[str, Any]:
     """Analyze a single file by delegating to ChatGPT for insights."""
     res = process_single_file(name, data)
-    return {"report_type": "summary", "summary": {}, **res, "source": name}
+    return {"report_type": "summary", **res, "source": name}

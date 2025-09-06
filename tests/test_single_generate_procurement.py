@@ -13,5 +13,6 @@ def test_single_generate_returns_summary_analysis_insights():
     assert resp.status_code == 200
     data = resp.json()
     assert "summary_text" in data
-    assert "analysis" in data and isinstance(data["analysis"], dict)
-    assert "insights" in data and isinstance(data["insights"], dict)
+    assert "analysis_text" in data and isinstance(data["analysis_text"], str)
+    assert "insights_text" in data and isinstance(data["insights_text"], str)
+    assert "analysis" not in data and "insights" not in data

@@ -23,6 +23,7 @@ def test_doors_quotes_like_excel_returns_summary():
     b = _xlsx_bytes(df)
     resp = process_single_file("doors_quotes_complete.xlsx", b)
     assert "summary_text" in resp
-    assert "analysis" in resp and isinstance(resp["analysis"], dict)
-    assert "insights" in resp and isinstance(resp["insights"], dict)
+    assert "analysis_text" in resp and isinstance(resp["analysis_text"], str)
+    assert "insights_text" in resp and isinstance(resp["insights_text"], str)
+    assert "analysis" not in resp and "insights" not in resp
 

@@ -13,5 +13,6 @@ def test_pdf_no_variance():
     j = r.json()
     assert j["kind"] == "insights"
     assert "summary_text" in j
-    assert "analysis" in j and isinstance(j["analysis"], dict)
-    assert "insights" in j and isinstance(j["insights"], dict)
+    assert "analysis_text" in j and isinstance(j["analysis_text"], str)
+    assert "insights_text" in j and isinstance(j["insights_text"], str)
+    assert "analysis" not in j and "insights" not in j

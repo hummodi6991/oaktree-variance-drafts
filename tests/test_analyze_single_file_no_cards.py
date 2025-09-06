@@ -8,6 +8,7 @@ def test_analyze_single_file_discards_cards():
     pdf_path = pathlib.Path('samples/procurement_example.pdf')
     data = pdf_path.read_bytes()
     res = asyncio.run(analyze_single_file(data, pdf_path.name))
-    assert "summary" in res and "analysis" in res and "insights" in res
     assert isinstance(res.get("summary_text"), str)
-    assert "items" not in res.get("summary", {})
+    assert isinstance(res.get("analysis_text"), str)
+    assert isinstance(res.get("insights_text"), str)
+    assert "summary" not in res and "analysis" not in res and "insights" not in res
