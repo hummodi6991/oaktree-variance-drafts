@@ -67,8 +67,11 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Package artifact
         run: |
-          mkdir -p package && cp -R * package/
-          echo "Zipping…" && cd package && zip -qry ../app.zip .
+          # Create a clean zip of the repo contents (tracked + untracked),
+          # excluding CI files and junk; no self-recursive copy.
+          zip -qry app.zip . \
+            -x "./.git/*" "./.github/*" "./app.zip" "**/__pycache__/*" "*.pyc" ".venv/*" "venv/*" "node_modules/*"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
