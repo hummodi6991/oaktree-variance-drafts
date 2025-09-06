@@ -3,37 +3,20 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch: {}
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    concurrency:
-      group: deploy-${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: true
-    permissions:
-      id-token: write
-      contents: read
+    permissions: { id-token: write, contents: read }
     env:
       AZURE_WEBAPP_NAME: oaktree-variance-dev
       AZURE_RESOURCE_GROUP: oaktree-variance-dev-rg
-
+      ACR_NAME: ${{ secrets.ACR_NAME }}       # <-- add this secret in GitHub
+    concurrency:
+      group: deploy-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Create deployable source zip
-        shell: bash
-        run: |
-          set -euo pipefail
-          zip -r app.zip . \
-            -x ".git/*" ".github/*" "*/__pycache__/*" "*.pyc" "node_modules/*"
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app
-          path: app.zip
-
-      # Azure login with OIDC
       - name: Azure OIDC login
         uses: azure/login@v2
         with:
@@ -41,82 +24,70 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Who am I in Azure?
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "== Account =="
-          az account show --query "{name:name,id:id,tenantId:tenantId}" -o table
-          echo "== Service principal behind AZURE_CLIENT_ID =="
-          az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" \
-            --query "{displayName:displayName,appId:appId,objectId:id}" -o table
-
       - name: Validate Azure inputs
         shell: bash
         run: |
           set -euo pipefail
-          for v in AZURE_WEBAPP_NAME AZURE_RESOURCE_GROUP; do
-            if [ -z "${!v:-}" ]; then
-              echo "::error::Missing $v"; exit 1
-            fi
-          done
-          echo "Using RG=$AZURE_RESOURCE_GROUP, APP=$AZURE_WEBAPP_NAME"
+          az account show -o table
           az group show -n "$AZURE_RESOURCE_GROUP" -o table
+          az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" -o table
 
-      - name: AppService config for Python
+      # Ensure ACR exists (idempotent); Basic SKU is fine for dev
+      - name: Ensure ACR exists
         shell: bash
         run: |
           set -euo pipefail
-          az webapp config set \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --linux-fx-version "Python|3.11" \
-            --always-on true
-          az webapp config appsettings set \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true WEBSITE_RUN_FROM_PACKAGE=1
-          az webapp config set \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --startup-file ""
-          az webapp log config \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --application-logging filesystem \
-            --web-server-logging filesystem \
-            --level information
-      - name: Start log tail (background)
-        shell: bash
-        run: |
-          ( az webapp log tail \
-              --resource-group "$AZURE_RESOURCE_GROUP" \
-              --name "$AZURE_WEBAPP_NAME" \
-              --timeout 600 || true ) &
-      - name: Deploy via Azure CLI (zip)
-        shell: bash
-        env:
-          ZIP_PATH: ./app.zip
-        run: |
-          set -euo pipefail
-          echo "Deploying $ZIP_PATH to $AZURE_WEBAPP_NAME in $AZURE_RESOURCE_GROUP"
-
-          # Try the modern command first (no unsupported flags).
-          if az webapp deploy \
-                --resource-group "$AZURE_RESOURCE_GROUP" \
-                --name "$AZURE_WEBAPP_NAME" \
-                --src-path "$ZIP_PATH" \
-                --type zip ; then
-            echo "Deploy succeeded via 'az webapp deploy'"
-          else
-            echo "Primary deploy failed or not supported; falling back to 'config-zip'…"
-            az webapp deployment source config-zip \
-                --resource-group "$AZURE_RESOURCE_GROUP" \
-                --name "$AZURE_WEBAPP_NAME" \
-                --src "$ZIP_PATH"
-            echo "Deploy succeeded via 'config-zip'"
+          if ! az acr show -n "$ACR_NAME" >/dev/null 2>&1; then
+            az acr create -n "$ACR_NAME" -g "$AZURE_RESOURCE_GROUP" --sku Basic
           fi
-      - name: Wait for site & health check
+          # Enable admin for simple docker login (can switch to MI later)
+          az acr update -n "$ACR_NAME" --admin-enabled true
+          echo "LOGIN_SERVER=$(az acr show -n \"$ACR_NAME\" --query loginServer -o tsv)" >> $GITHUB_ENV
+
+      # Build & push image
+      - name: Docker login to ACR
+        shell: bash
+        run: |
+          set -euo pipefail
+          USERNAME=$(az acr credential show -n "$ACR_NAME" --query username -o tsv)
+          PASSWORD=$(az acr credential show -n "$ACR_NAME" --query passwords[0].value -o tsv)
+          echo "$PASSWORD" | docker login "$LOGIN_SERVER" --username "$USERNAME" --password-stdin
+
+      - name: Build & push image
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="$LOGIN_SERVER/oaktree-variance"
+          TAG="${GITHUB_SHA::7}"
+          docker build -t "$IMAGE_REPO:$TAG" -t "$IMAGE_REPO:latest" .
+          docker push "$IMAGE_REPO:$TAG"
+          docker push "$IMAGE_REPO:latest"
+          echo "IMAGE_URI=$IMAGE_REPO:$TAG" >> $GITHUB_ENV
+
+      # Point the Web App to the new image
+      - name: Configure Web App to use container image
+        shell: bash
+        run: |
+          set -euo pipefail
+          USERNAME=$(az acr credential show -n "$ACR_NAME" --query username -o tsv)
+          PASSWORD=$(az acr credential show -n "$ACR_NAME" --query passwords[0].value -o tsv)
+          # Set container image and registry credentials
+          az webapp config container set \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --docker-custom-image-name "$IMAGE_URI" \
+            --docker-registry-server-url "https://$LOGIN_SERVER" \
+            --docker-registry-server-user "$USERNAME" \
+            --docker-registry-server-password "$PASSWORD"
+          # App settings: tell container which port & module to use (change APP_MODULE if not app:app)
+          az webapp config appsettings set \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --settings WEBSITES_PORT=8000 APP_MODULE=app:app WEBSITES_CONTAINER_START_TIME_LIMIT=1800 \
+                       SCM_DO_BUILD_DURING_DEPLOYMENT=false WEBSITE_RUN_FROM_PACKAGE=0 \
+                       DOCKER_ENABLE_CI=true
+
+      - name: Warm up & basic health check
         shell: bash
         env:
           APP_URL: https://oaktree-variance-dev.azurewebsites.net/
@@ -127,8 +98,7 @@ jobs:
             if [ "$code" = "200" ] || [ "$code" = "302" ]; then
               echo "Site is up with HTTP $code"; exit 0
             fi
-            echo "Still starting... ($i/36) HTTP $code"
+            echo "Waiting for container... ($i/36) HTTP $code"
             sleep 10
           done
-          echo "::error::Site did not return 200/302 in time. Recent logs below (tail already running)."
-          exit 1
+          echo "::error::Site did not return 200/302 in time."; exit 1
