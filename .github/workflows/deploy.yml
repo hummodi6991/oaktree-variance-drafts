@@ -17,6 +17,10 @@ on:
       - '.github/workflows/deploy.yml'
   workflow_dispatch: {}   # allow manual runs
 
+permissions:
+  id-token: write
+  contents: read
+
 concurrency:
   group: oaktree-dev-${{ github.ref }}
   cancel-in-progress: true
@@ -84,17 +88,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: app, path: . }
-      - uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-      - name: Ensure Azure doesn't rebuild (one-time, idempotent)
+          name: app
+          path: .
+
+      - name: Azure OIDC login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure context
         run: |
-          az webapp config appsettings set \
-            --name oaktree-variance-dev \
-            --resource-group <YOUR_RG> \
-            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false
-      - name: Deploy zip
+          az account show --query "{subscription:id, tenant:tenantId}" --output table
+
+      - name: Deploy zip to Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: oaktree-variance-dev
