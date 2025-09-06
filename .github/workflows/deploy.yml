@@ -8,7 +8,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     concurrency:
-      group: deploy-${{ github.workflow }}-oaktree-variance-dev-${{ github.ref }}
+      group: deploy-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
     permissions:
       id-token: write
@@ -86,24 +86,26 @@ jobs:
             --application-logging filesystem \
             --web-server-logging filesystem \
             --level information
+      - name: Start log tail (background)
+        shell: bash
+        run: |
+          ( az webapp log tail \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --timeout 600 || true ) &
       - name: Deploy via Azure CLI (zip)
         shell: bash
         env:
           ZIP_PATH: ./app.zip
         run: |
           set -euo pipefail
-          if [ ! -f "$ZIP_PATH" ]; then
-            echo "::error::Zip artifact not found at $ZIP_PATH"; ls -la; exit 1
-          fi
-          # start log tail in background for up to 10 minutes
-          ( az webapp log tail --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME" --timeout 600 || true ) &
           echo "Deploying $ZIP_PATH to $AZURE_WEBAPP_NAME in $AZURE_RESOURCE_GROUP"
           az webapp deploy \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_WEBAPP_NAME" \
             --src-path "$ZIP_PATH" \
             --type zip \
-            --async false \
+            --async true \        # <— don’t block here
             --restart true
       - name: Wait for site & health check
         shell: bash
@@ -111,8 +113,7 @@ jobs:
           APP_URL: https://oaktree-variance-dev.azurewebsites.net/
         run: |
           set -euo pipefail
-          echo "Waiting for site to come up..."
-          for i in {1..36}; do  # ~6 minutes
+          for i in {1..36}; do
             code=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL" || true)
             if [ "$code" = "200" ] || [ "$code" = "302" ]; then
               echo "Site is up with HTTP $code"; exit 0
@@ -120,9 +121,5 @@ jobs:
             echo "Still starting... ($i/36) HTTP $code"
             sleep 10
           done
-          echo "::error::Site did not return 200/302 in time. Recent logs:"
-          az webapp log tail \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --timeout 120 || true
+          echo "::error::Site did not return 200/302 in time. Recent logs below (tail already running)."
           exit 1
