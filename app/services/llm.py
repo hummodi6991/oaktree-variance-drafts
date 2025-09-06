@@ -53,6 +53,7 @@ Raw text (possibly noisy, use prudently):
             ],
         )
         text = (msg.choices[0].message.content or "").strip()
+        source = "llm"
     except Exception:
         # Fallback when the OpenAI client isn't configured or errors out.  We still
         # want to provide the caller with something meaningful so the UI can render
@@ -68,6 +69,7 @@ Raw text (possibly noisy, use prudently):
                 "summary_text": "No textual content could be extracted from the document.",
                 "analysis_text": "No numeric data found for analysis.",
                 "insights_text": "No financial insights identified.",
+                "source": "local",
             }
 
         # crude summary: first 40 words from the raw text
@@ -95,11 +97,12 @@ Raw text (possibly noisy, use prudently):
             "summary_text": summary,
             "analysis_text": analysis,
             "insights_text": insights,
+            "source": "local",
         }
 
     # Very light splitter: try to split into 3 blocks; if not, put everything in 'summary_text'
     blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
-    out = {"summary_text": text, "analysis_text": "", "insights_text": ""}
+    out = {"summary_text": text, "analysis_text": "", "insights_text": "", "source": source}
     if len(blocks) >= 3:
         out = {
             "summary_text": blocks[0],
@@ -153,8 +156,10 @@ def llm_financial_summary_file(filename: str, data: bytes) -> Dict[str, str]:
             ],
         )
         text = (resp.choices[0].message.content or "").strip()
+        source = "llm"
     except Exception:
         text = ""
+        source = "local"
 
     if not text:
         from app.utils.file_to_text import file_bytes_to_text
@@ -163,11 +168,12 @@ def llm_financial_summary_file(filename: str, data: bytes) -> Dict[str, str]:
         return llm_financial_summary({"raw_text": raw_text})
 
     blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
-    out = {"summary_text": text, "analysis_text": "", "insights_text": ""}
+    out = {"summary_text": text, "analysis_text": "", "insights_text": "", "source": source}
     if len(blocks) >= 3:
         out = {
             "summary_text": blocks[0],
             "analysis_text": blocks[1],
             "insights_text": "\n\n".join(blocks[2:]),
+            "source": source,
         }
     return out
