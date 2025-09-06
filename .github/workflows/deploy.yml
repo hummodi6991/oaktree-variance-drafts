@@ -2,13 +2,14 @@ name: deploy
 on:
   push:
     branches: [ main ]
-concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_dispatch: {}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-${{ github.workflow }}-${{ env.AZURE_WEBAPP_NAME }}-${{ github.ref }}
+      cancel-in-progress: true
     permissions:
       id-token: write
       contents: read

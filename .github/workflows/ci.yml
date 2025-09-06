@@ -2,14 +2,7 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [ main ]
-    paths-ignore:
-      - 'README.md'
-      - 'SECURITY.md'
-      - 'PROMPT_CONTRACT.md'
-      - 'data/**/*.csv'
-      - '.gitignore'
+  workflow_dispatch: {}
 
 jobs:
   test:
