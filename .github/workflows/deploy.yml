@@ -25,6 +25,8 @@ jobs:
           DETECT=""
           if [ -f main.py ] && grep -qi "FastAPI(" main.py; then
             DETECT="main:app"
+          elif [ -f app/main.py ] && grep -qi "FastAPI(" app/main.py; then
+            DETECT="app.main:app"
           elif [ -f app.py ] && grep -qi "Flask(" app.py; then
             DETECT="app:app"
           elif ls -1 **/wsgi.py >/dev/null 2>&1; then
@@ -130,7 +132,7 @@ jobs:
           CANDIDATES=()
           # include detected value (if any) and common fallbacks
           if [ -n "${APP_MODULE_DETECTED:-}" ]; then CANDIDATES+=("${APP_MODULE_DETECTED}"); fi
-          CANDIDATES+=("main:app" "app:app")
+          CANDIDATES+=("main:app" "app.main:app" "app:app")
 
           run_and_probe () {
             local module="$1"
