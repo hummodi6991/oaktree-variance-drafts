@@ -52,9 +52,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          USERNAME=$(az acr credential show -n "$ACR_NAME" --query username -o tsv)
-          PASSWORD=$(az acr credential show -n "$ACR_NAME" --query passwords[0].value -o tsv)
-          echo "$PASSWORD" | docker login "$LOGIN_SERVER" --username "$USERNAME" --password-stdin
+
+          # Ensure we have the login server (from prior step or fetch now)
+          if [ -z "${LOGIN_SERVER:-}" ]; then
+            LOGIN_SERVER=$(az acr show -n "$ACR_NAME" --query loginServer -o tsv || true)
+          fi
+          if [ -z "${LOGIN_SERVER:-}" ]; then
+            echo "::error::LOGIN_SERVER is empty; cannot log in to ACR. Verify ACR_NAME secret and ACR exists."
+            exit 1
+          fi
+          echo "ACR login server: $LOGIN_SERVER"
+
+          echo "Trying 'az acr login' (token-based)…"
+          if az acr login -n "$ACR_NAME" >/dev/null 2>&1; then
+            echo "Logged in to $LOGIN_SERVER via 'az acr login'."
+          else
+            echo "::warning::'az acr login' failed (likely missing AcrPush). Falling back to admin credentials…"
+            # Enable admin (idempotent) and log in with admin username/password
+            az acr update -n "$ACR_NAME" --admin-enabled true
+            USERNAME=$(az acr credential show -n "$ACR_NAME" --query username -o tsv)
+            PASSWORD=$(az acr credential show -n "$ACR_NAME" --query passwords[0].value -o tsv)
+            if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+              echo "::error::Could not retrieve ACR admin credentials. Ensure admin is enabled on the registry."
+              exit 1
+            fi
+            echo "$PASSWORD" | docker login "$LOGIN_SERVER" --username "$USERNAME" --password-stdin
+            echo "Logged in to $LOGIN_SERVER using admin credentials."
+          fi
 
       - name: Build & push image
         shell: bash
