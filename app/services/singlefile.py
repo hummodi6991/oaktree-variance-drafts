@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 
-from app.services.llm import llm_financial_summary_file, llm_financial_summary
-from app.schemas import GenerationMeta
+from app.services.llm import llm_financial_summary_file
 import os
 from app.utils.retries import retry_call
 
@@ -16,14 +15,16 @@ def process_single_file(
     *_,
     local_only: bool = False,
     **__,
-) -> Tuple[Dict[str, Any], GenerationMeta]:
+) -> Dict[str, Any]:
     """Send a single uploaded file directly to ChatGPT for analysis.
 
     The file is transmitted to the LLM without any local parsing. The model
     returns three plain-text sections: summary, financial analysis and financial
-    insights.
+    insights. Metadata about the generation is returned under ``_meta``.
     """
 
     # LLM-only: no fallbacks. Use retries for transient failures, then raise.
-    return retry_call(llm_financial_summary_file, filename, data, local_only=False)
+    res, meta = retry_call(llm_financial_summary_file, filename, data, local_only=False)
+    res["_meta"] = meta.model_dump()
+    return res
 

@@ -21,10 +21,16 @@ async def from_file(request: Request, file: UploadFile = File(...)):
     try:
         data = await file.read()
         local_only = is_local_only(request)
-        res, meta = await asyncio.to_thread(
+        res = await asyncio.to_thread(
             process_single_file, file.filename, data, local_only=local_only
         )
-        logger.info("drafts/from-file llm_used=%s model=%s forced_local=%s", meta.llm_used, meta.model, meta.forced_local)
-        return {"kind": "insights", **res, "_meta": meta.model_dump()}
+        meta = res.pop("_meta", {})
+        logger.info(
+            "drafts/from-file llm_used=%s model=%s forced_local=%s",
+            meta.get("llm_used"),
+            meta.get("model"),
+            meta.get("forced_local"),
+        )
+        return {"kind": "insights", **res, "_meta": meta}
     except Exception as e:  # pragma: no cover - defensive
         return {"error": str(e)}
