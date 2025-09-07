@@ -126,6 +126,7 @@ jobs:
         shell: bash
         env:
           PORT: "8000"
+          PROBE_PATH: "/health"
         run: |
           set -euo pipefail
           IMAGE_REPO="${IMAGE_REPO:?missing}"; TAG="${IMAGE_TAG:?missing}"
@@ -142,7 +143,8 @@ jobs:
             docker run -d --name "${name}" -e PORT="${PORT}" -e APP_MODULE="${module}" -p ${PORT}:${PORT} "${IMAGE_REPO}:${TAG}" >/dev/null
             # wait up to ~60s for a response
             for i in {1..60}; do
-              code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/" || true)
+              path="${PROBE_PATH:-/health}"
+              code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}${path}" || true)
               if [ "$code" = "200" ] || [ "$code" = "302" ]; then
                 echo "Local smoke test PASSED with HTTP $code using APP_MODULE=${module}"
                 docker rm -f "${name}" >/dev/null 2>&1 || true
@@ -228,7 +230,7 @@ jobs:
       - name: Warm up & basic health check
         shell: bash
         env:
-          APP_URL: https://oaktree-variance-dev.azurewebsites.net/
+          APP_URL: https://oaktree-variance-dev.azurewebsites.net/health
         run: |
           set -euo pipefail
           for i in {1..36}; do
