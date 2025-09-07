@@ -146,8 +146,12 @@ def llm_financial_summary_file(filename: str, data: bytes) -> Tuple[Dict[str, st
     ext = Path(filename).suffix.lower()
 
     instruction = (
-        "Review the attached document and return three plain-text sections: "
-        "Summary, Financial analysis, Financial insights."
+        "Review the attached document and return exactly three plain-text sections "
+        "using these explicit tags (no extra text anywhere):\n"
+        "[SUMMARY]\n...your summary...\n[/SUMMARY]\n"
+        "[ANALYSIS]\n...your financial analysis...\n[/ANALYSIS]\n"
+        "[INSIGHTS]\n...your financial insights...\n[/INSIGHTS]\n"
+        "Rules: be numeric where possible, no tables or code blocks, no preambles."
     )
 
     if ext == ".pdf":
@@ -192,13 +196,23 @@ def llm_financial_summary_file(filename: str, data: bytes) -> Tuple[Dict[str, st
         },
         "forced_local": False,
     }
-    out = {"summary_text": text, "analysis_text": "", "insights_text": "", "source": "llm"}
-    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
-    if len(blocks) >= 3:
-        out = {
-            "summary_text": _strip_markdown_noise(blocks[0]),
-            "analysis_text": _strip_markdown_noise(blocks[1]),
-            "insights_text": _strip_markdown_noise("\n\n".join(blocks[2:])),
-            "source": "llm",
-        }
+
+    import re
+
+    def _grab(tag: str) -> str:
+        m = re.search(rf"\[{tag}\](.*?)\[/#?{tag}\]", text, flags=re.IGNORECASE | re.DOTALL)
+        if not m:
+            return ""
+        return _strip_markdown_noise((m.group(1) or "").strip())
+
+    summary = _grab("SUMMARY") or "N/A"
+    analysis = _grab("ANALYSIS") or "N/A"
+    insights = _grab("INSIGHTS") or "N/A"
+
+    out = {
+        "summary_text": summary,
+        "analysis_text": analysis,
+        "insights_text": insights,
+        "source": "llm",
+    }
     return out, meta
