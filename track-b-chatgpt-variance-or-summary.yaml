@@ -1,0 +1,148 @@
+name: track-b-chatgpt-variance-or-summary
+label: "Track B → ChatGPT Variance or Summary"
+description: >-
+  Single flexible file processed via ChatGPT. If both budget and actual values
+  exist, compute variance; otherwise return summary, analysis, and insights.
+
+ui:
+  layout: vertical
+  sections:
+    - id: track_b_single
+      label: "Track B — Flexible Upload"
+      inputs:
+        - { id: file_flexible, type: file, label: "Single Flexible Upload", accept: [".csv",".xlsx",".xls",".pdf",".doc",".docx",".txt",".md",".json"] }
+    - id: run
+      inputs:
+        - id: generate
+          type: button
+          label: "Generate"
+          style: primary
+          on_click: { action: run-track-b-chatgpt-variance-or-summary }
+
+actions:
+  - id: run-track-b-chatgpt-variance-or-summary
+    type: workflow
+    steps:
+      # 0) (Optional) lightweight file probe
+      - id: b_inspect
+        type: file_inspect
+        file: "{{ inputs.file_flexible }}"
+
+      # 1) Use ChatGPT to normalize whatever the single file contains (CSV/XLSX/PDF/DOC/TXT)
+      - id: b_extract
+        type: llm_extract
+        model: "{{ env.OPENAI_MODEL_EXTRACT | default('gpt-4o') }}"
+        timeout_sec: 90
+        retry: { max: 2, backoff_sec: 2 }
+        files: ["{{ inputs.file_flexible }}"]
+        prompt: |
+          ROLE: Finance data wrangler.
+          INPUT: One file (PDF/Word/CSV/Excel/Text/JSON). May be incomplete or messy.
+          TASK:
+            1) Parse ONLY what exists in the file (do not invent).
+            2) Produce a normalized CSV with tolerant headers:
+               ["period","cost_center","account","metric","budget","actual","amount","currency","source","notes"]
+               - If the file already separates budget/actuals, map to "budget" and "actual".
+               - If it has a single value column, map to "amount" + the best "metric" you can cite from the file.
+            3) Return:
+               - normalized_csv  (UTF-8 CSV string, evidence-only)
+               - notes           (assumptions, gaps, and citations e.g., page/sheet/column)
+          HARD RULES:
+            - No hallucinations. If a field is unknown, leave blank and explain in notes.
+
+      # 2) Route depending on whether budget & actuals are present in the normalized CSV
+      - id: b_route_ba
+        type: branch
+        branches:
+          - when: >-
+              {{
+                (steps.b_extract.outputs.normalized_csv | lower) is string
+                and
+                (
+                  'budget' in (steps.b_extract.outputs.normalized_csv | lower)
+                  or 'planned' in (steps.b_extract.outputs.normalized_csv | lower)
+                  or 'plan' in (steps.b_extract.outputs.normalized_csv | lower)
+                  or 'budget_sar' in (steps.b_extract.outputs.normalized_csv | lower)
+                )
+                and
+                (
+                  'actual' in (steps.b_extract.outputs.normalized_csv | lower)
+                  or 'actuals' in (steps.b_extract.outputs.normalized_csv | lower)
+                  or 'spent' in (steps.b_extract.outputs.normalized_csv | lower)
+                  or 'spend' in (steps.b_extract.outputs.normalized_csv | lower)
+                  or 'ctd' in (steps.b_extract.outputs.normalized_csv | lower)
+                )
+              }}
+            goto: b_variance_analyze
+          - else:
+            goto: b_summary_analyze
+
+      # 3A) Budget+Actuals path — compute variance (abs & %) and write an exec summary
+      - id: b_variance_analyze
+        type: llm_analyze
+        model: "{{ env.OPENAI_MODEL_ANALYZE | default('gpt-4o') }}"
+        timeout_sec: 90
+        retry: { max: 2, backoff_sec: 2 }
+        inputs:
+          csv:   "{{ steps.b_extract.outputs.normalized_csv }}"
+          notes: "{{ steps.b_extract.outputs.notes }}"
+        prompt: |
+          ROLE: Variance analyst & auditor.
+          INPUTS:
+            - normalized CSV (budget/actuals present)
+            - notes (assumptions & data-quality)
+          TASK:
+            1) Build a Variance table ONLY for rows where both budget and actual exist:
+               columns = [period?, cost_center?, account?, metric?, budget, actual, variance, variance_pct]
+               - variance = actual - budget
+               - variance_pct = variance / budget   (blank if budget == 0 or null)
+               - Keep original number formatting neutral (no currency signs).
+            2) Provide an "Executive Summary" in markdown with:
+               - Top 5 positive/negative variances (by absolute value)
+               - Material drivers (accounts/categories) with brief bullets
+               - Trends by period if periods exist
+            3) Provide a brief "Data Quality & Assumptions" section referencing lines/sheets/pages.
+          OUTPUTS:
+            - text            (markdown report)
+            - variance_table  (machine-readable table)
+          HARD RULES:
+            - Evidence-only. No invented figures. Omit anything not in the CSV/notes.
+
+      # 3B) No budget/actuals — return summary, analysis, and insights without fabricating budget lines
+      - id: b_summary_analyze
+        type: llm_analyze
+        model: "{{ env.OPENAI_MODEL_ANALYZE | default('gpt-4o') }}"
+        timeout_sec: 90
+        retry: { max: 2, backoff_sec: 2 }
+        inputs:
+          csv:   "{{ steps.b_extract.outputs.normalized_csv }}"
+          notes: "{{ steps.b_extract.outputs.notes }}"
+        prompt: |
+          ROLE: Finance analyst.
+          Using ONLY the CSV/notes:
+            - Return three sections in markdown:
+              (1) Financial Summary — totals by period/account/cost_center if present.
+              (2) Financial Analysis — top spends, month-over-month deltas, notable patterns/outliers.
+              (3) Financial Insights — actionable bullets; call out gaps and data-quality issues.
+          HARD RULES:
+            - No invention. Do not fabricate budgets/forecasts if absent.
+
+      # 4) Deliver
+      - id: deliver_single
+        type: result
+        outputs:
+          report_markdown: >-
+            {{
+              steps.b_variance_analyze.outputs.text
+              if steps.b_variance_analyze.outputs.text is present
+              else steps.b_summary_analyze.outputs.text
+            }}
+          normalized_csv: "{{ steps.b_extract.outputs.normalized_csv }}"
+          data_notes:     "{{ steps.b_extract.outputs.notes }}"
+          variance_table: "{{ steps.b_variance_analyze.outputs.variance_table }}"
+
+outputs:
+  - { id: report_markdown, label: "Report", type: markdown, from: "{{ steps.deliver_single.outputs.report_markdown }}" }
+  - { id: normalized_csv, label: "Normalized Data", type: file, when: "{{ steps.deliver_single.outputs.normalized_csv is present }}", from: "{{ steps.deliver_single.outputs.normalized_csv }}" }
+  - { id: data_notes, label: "Extraction Notes", type: text, when: "{{ steps.deliver_single.outputs.data_notes is present }}", from: "{{ steps.deliver_single.outputs.data_notes }}" }
+  - { id: variance_table, label: "Variance Table", type: table, when: "{{ steps.deliver_single.outputs.variance_table is present }}", from: "{{ steps.deliver_single.outputs.variance_table }}" }
