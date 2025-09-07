@@ -17,6 +17,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Detect APP_MODULE automatically
+        id: detect_app
+        shell: bash
+        run: |
+          set -euo pipefail
+          DETECT=""
+          if [ -f main.py ] && grep -qi "FastAPI(" main.py; then
+            DETECT="main:app"
+          elif [ -f app.py ] && grep -qi "Flask(" app.py; then
+            DETECT="app:app"
+          elif ls -1 **/wsgi.py >/dev/null 2>&1; then
+            WSGI_PATH=$(ls -1 **/wsgi.py | head -n1)
+            # convert path like projectname/wsgi.py -> projectname.wsgi
+            DETECT="${WSGI_PATH%/wsgi.py}.wsgi"
+            DETECT="${DETECT//\//.}"
+          fi
+
+          if [ -z "$DETECT" ]; then
+            echo "::warning::Could not detect APP_MODULE. Defaulting to main:app. Adjust if needed."
+            DETECT="main:app"
+          fi
+          echo "APP_MODULE_DETECTED=$DETECT" | tee -a "$GITHUB_ENV"
+          echo "detected=$DETECT" >> "$GITHUB_OUTPUT"
+
       - name: Azure OIDC login
         uses: azure/login@v2
         with:
@@ -80,29 +104,57 @@ jobs:
             echo "Logged in to $LOGIN_SERVER using admin credentials."
           fi
 
-      - name: Build & push image
+      - name: Build image (local only)
         shell: bash
         run: |
           set -euo pipefail
-          # Re-resolve the ACR login server in this step (env from previous step may not be loaded here)
           LOGIN_SERVER="${LOGIN_SERVER:-$(az acr show -n "$ACR_NAME" --query loginServer -o tsv || true)}"
           if [ -z "${LOGIN_SERVER:-}" ]; then
-            echo "::error::LOGIN_SERVER is empty; cannot build a valid image tag. Check ACR_NAME and ACR existence."
-            exit 1
+            echo "::error::LOGIN_SERVER is empty; verify ACR_NAME and that the ACR exists."; exit 1
           fi
-          echo "Using ACR login server: $LOGIN_SERVER"
-
           IMAGE_REPO="${LOGIN_SERVER}/oaktree-variance"
           TAG="${GITHUB_SHA::7}"
+          echo "IMAGE_REPO=$IMAGE_REPO" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+          docker build \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            -t "${IMAGE_REPO}:${TAG}" .
 
-          echo "Building image ${IMAGE_REPO}:${TAG} …"
-          docker build -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" .
+      - name: Smoke test container locally
+        shell: bash
+        env:
+          PORT: "8000"
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="${IMAGE_REPO:?missing}"; TAG="${IMAGE_TAG:?missing}"
+          APP_MODULE="${APP_MODULE_DETECTED:?missing}"
+          echo "Running image ${IMAGE_REPO}:${TAG} with APP_MODULE=${APP_MODULE} on PORT=${PORT}"
+          CID=$(docker run -d --rm -e PORT=${PORT} -e APP_MODULE="${APP_MODULE}" -p ${PORT}:${PORT} "${IMAGE_REPO}:${TAG}")
+          # Probe localhost until it responds or timeout
+          for i in {1..60}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/" || true)
+            if [ "$code" = "200" ] || [ "$code" = "302" ]; then
+              echo "Local smoke test passed with HTTP $code"
+              break
+            fi
+            sleep 2
+          done
+          if [ "$code" != "200" ] && [ "$code" != "302" ]; then
+            echo "::error::Local smoke test failed (HTTP $code). Printing container logs:"
+            docker logs "$CID" || true
+            docker rm -f "$CID" >/dev/null 2>&1 || true
+            exit 1
+          fi
+          docker rm -f "$CID" >/dev/null 2>&1 || true
 
-          echo "Pushing image tags …"
+      - name: Push image to ACR
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="${IMAGE_REPO:?}"; TAG="${IMAGE_TAG:?}"
           docker push "${IMAGE_REPO}:${TAG}"
+          docker tag "${IMAGE_REPO}:${TAG}" "${IMAGE_REPO}:latest"
           docker push "${IMAGE_REPO}:latest"
-
-          # Export for later step
           echo "IMAGE_URI=${IMAGE_REPO}:${TAG}" >> "$GITHUB_ENV"
 
       # Point the Web App to the new image
@@ -120,27 +172,19 @@ jobs:
             --docker-registry-server-url "https://$LOGIN_SERVER" \
             --docker-registry-server-user "$USERNAME" \
             --docker-registry-server-password "$PASSWORD"
-          # App settings: tell container which port & module to use (change APP_MODULE if not app:app)
-          az webapp config appsettings set \
-            --name "$AZURE_WEBAPP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --settings WEBSITES_PORT=8000 APP_MODULE=app:app WEBSITES_CONTAINER_START_TIME_LIMIT=1800 \
-                       SCM_DO_BUILD_DURING_DEPLOYMENT=false WEBSITE_RUN_FROM_PACKAGE=0 \
-                       DOCKER_ENABLE_CI=true
 
       - name: Ensure app settings (port & entrypoint)
         shell: bash
         run: |
           set -euo pipefail
+          APP_MODULE="${APP_MODULE_DETECTED:?}"
           az webapp config appsettings set \
             --name "$AZURE_WEBAPP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
-            --settings WEBSITES_PORT=8000 APP_MODULE=main:app WEBSITES_CONTAINER_START_TIME_LIMIT=1800
-          echo "Current image/port:"
-          az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" \
-            --query "{image:siteConfig.linuxFxVersion, port:siteConfig.appSettings[?name=='WEBSITES_PORT'].value | [0]}" -o table
+            --settings WEBSITES_PORT=8000 APP_MODULE="$APP_MODULE" WEBSITES_CONTAINER_START_TIME_LIMIT=1800
+          echo "Configured APP_MODULE=$APP_MODULE and WEBSITES_PORT=8000"
 
-      - name: Enable & tail container logs
+      - name: Enable & tail container logs (background)
         shell: bash
         run: |
           set -euo pipefail
@@ -148,13 +192,7 @@ jobs:
             --name "$AZURE_WEBAPP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --docker-container-logging filesystem
-          # brief restart to pick up settings
-          az webapp restart -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME"
-          # tail for up to 10 minutes in background so we can see startup errors
-          ( az webapp log tail \
-              --resource-group "$AZURE_RESOURCE_GROUP" \
-              --name "$AZURE_WEBAPP_NAME" \
-              --timeout 600 || true ) &
+          ( az webapp log tail --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME" --timeout 600 || true ) &
 
       - name: Warm up & basic health check
         shell: bash
