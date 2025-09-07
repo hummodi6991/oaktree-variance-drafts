@@ -84,12 +84,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IMAGE_REPO="$LOGIN_SERVER/oaktree-variance"
+          # Re-resolve the ACR login server in this step (env from previous step may not be loaded here)
+          LOGIN_SERVER="${LOGIN_SERVER:-$(az acr show -n "$ACR_NAME" --query loginServer -o tsv || true)}"
+          if [ -z "${LOGIN_SERVER:-}" ]; then
+            echo "::error::LOGIN_SERVER is empty; cannot build a valid image tag. Check ACR_NAME and ACR existence."
+            exit 1
+          fi
+          echo "Using ACR login server: $LOGIN_SERVER"
+
+          IMAGE_REPO="${LOGIN_SERVER}/oaktree-variance"
           TAG="${GITHUB_SHA::7}"
-          docker build -t "$IMAGE_REPO:$TAG" -t "$IMAGE_REPO:latest" .
-          docker push "$IMAGE_REPO:$TAG"
-          docker push "$IMAGE_REPO:latest"
-          echo "IMAGE_URI=$IMAGE_REPO:$TAG" >> $GITHUB_ENV
+
+          echo "Building image ${IMAGE_REPO}:${TAG} …"
+          docker build -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" .
+
+          echo "Pushing image tags …"
+          docker push "${IMAGE_REPO}:${TAG}"
+          docker push "${IMAGE_REPO}:latest"
+
+          # Export for later step
+          echo "IMAGE_URI=${IMAGE_REPO}:${TAG}" >> "$GITHUB_ENV"
 
       # Point the Web App to the new image
       - name: Configure Web App to use container image
