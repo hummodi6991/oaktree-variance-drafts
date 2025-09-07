@@ -230,32 +230,31 @@ jobs:
       - name: Warm up & basic health check
         shell: bash
         env:
-          # Tip: set this to the exact endpoint for your deployed slot/env
-          # e.g. https://<app>-<slot>.azurewebsites.net/health
-          APP_URL: https://oaktree-variance-dev.azurewebsites.net/health
-          # total wait ≈ attempts * sleep_seconds (here: 120 * 5s = 10 min)
           WARMUP_ATTEMPTS: "120"
           WARMUP_SLEEP_SECONDS: "5"
         run: |
           set -euo pipefail
+          # Requires AZURE_RESOURCE_GROUP and AZURE_WEBAPP_NAME to be set (e.g., as env or secrets).
+          HOST=$(az webapp show -g "${AZURE_RESOURCE_GROUP}" -n "${AZURE_WEBAPP_NAME}" --query defaultHostName -o tsv)
+          APP_URL="${APP_URL_OVERRIDE:-https://${HOST}/health}"
+
           echo "Probing $APP_URL"
-          # preflight: show DNS/IP to catch resolution issues
-          getent hosts "$(echo "$APP_URL" | awk -F/ '{print $3}')" || true
-          # shell-safe loop
+          # If DNS doesn't resolve from this runner (private endpoint/access restrictions), skip external warmup.
+          if ! getent hosts "$HOST" >/dev/null; then
+            echo "::warning::DNS for $HOST doesn't resolve from this runner (likely private endpoint). Skipping external warmup."
+            exit 0
+          fi
+
           i=1
           while [ "$i" -le "${WARMUP_ATTEMPTS}" ]; do
-            # follow redirects, short timeouts; map failures to 000 for logging
-            code="$(curl -fsS -o /dev/null -w "%{http_code}" -L \
-                     --connect-timeout 5 --max-time 8 "$APP_URL" 2>curl.err || echo 000)"
+            code="$(curl -fsS -o /dev/null -w "%{http_code}" -L --connect-timeout 5 --max-time 8 "$APP_URL" 2>curl.err || echo 000)"
             case "$code" in
-              200|204|301|302|308)
-                echo "Site is up with HTTP $code"; exit 0 ;;
+              200|204|301|302|308) echo "Site is up (HTTP $code)"; exit 0 ;;
             esac
             printf "Waiting for container... (%s/%s) HTTP %s\n" "$i" "${WARMUP_ATTEMPTS}" "$code"
-            # show the last curl error line if present (helps with HTTP 000)
             [ -s curl.err ] && tail -n1 curl.err || true
             i=$((i+1))
             sleep "${WARMUP_SLEEP_SECONDS}"
           done
-          echo "Error: Site did not return a success code (200/204/301/302/308) in time."
+          echo "Error: site did not return a success code in time."
           exit 1
