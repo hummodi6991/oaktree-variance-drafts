@@ -2,9 +2,13 @@ import os
 from typing import Dict, Any, Tuple
 
 from app.schemas import GenerationMeta, TokenUsage
-from openai_client_helper import build_client
-
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+from app.llm.openai_client import (
+    build_client,
+    get_openai_model,
+    get_fallback_policy,
+    get_openai_key,
+    OpenAIConfigError,
+)
 
 def llm_financial_summary(payload: Dict[str, Any], *, local_only: bool = False) -> Tuple[Dict[str, str], GenerationMeta]:
     """
@@ -44,7 +48,7 @@ Raw text (possibly noisy, use prudently):
         try:  # pragma: no cover - network call
             client = build_client()
             msg = client.responses.create(
-                model=OPENAI_MODEL,
+                model=get_openai_model(),
                 temperature=0.2,
                 input=[
                     {"role": "system", "content": "Be precise, numeric, and concise. Output plain text only."},
@@ -56,7 +60,7 @@ Raw text (possibly noisy, use prudently):
             meta = GenerationMeta(
                 llm_used=True,
                 provider="OpenAI",
-                model=OPENAI_MODEL,
+                model=get_openai_model(),
                 token_usage=TokenUsage(
                     prompt_tokens=getattr(usage, "input_tokens", None),
                     completion_tokens=getattr(usage, "output_tokens", None),
@@ -133,32 +137,50 @@ Raw text (possibly noisy, use prudently):
     return out, meta
 
 
-def llm_financial_summary_file(filename: str, data: bytes, *, local_only: bool = False) -> Tuple[Dict[str, str], GenerationMeta]:
-    """Send a raw uploaded file to ChatGPT for three text sections.
+def llm_financial_summary_file(filename: str, data: bytes, *, local_only: bool = False) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """Send a raw uploaded file to ChatGPT for three text sections with fallback.
 
-    The file is transmitted to the OpenAI API as an attachment so no local
-    parsing is required.  When the API is unavailable or the request fails, the
-    function falls back to converting the file to text and delegating to
-    :func:`llm_financial_summary`.
+    Local mode is used only when explicitly requested or when the configured
+    fallback policy allows it.
     """
 
-    # Support both OpenAI and Azure OpenAI environments
-    api_key = (
-        os.getenv("OPENAI_API_KEY")
-        or os.getenv("AZURE_OPENAI_API_KEY")
-        or ""
-    ).strip()
-    if local_only or not api_key:
+    def _local_summary() -> Tuple[Dict[str, str], Dict[str, Any]]:
         from app.utils.file_to_text import file_bytes_to_text
 
-        text = file_bytes_to_text(filename, data)
-        return llm_financial_summary({"raw_text": text}, local_only=True)
+        raw_text = file_bytes_to_text(filename, data)
+        out, _ = llm_financial_summary({"raw_text": raw_text}, local_only=True)
+        meta_local = {
+            "provider": "local",
+            "model": None,
+            "llm_used": "local",
+            "fallback_reason": meta.get("fallback_reason", "none"),
+        }
+        return out, meta_local
+
+    meta: Dict[str, Any] = {
+        "provider": None,
+        "model": None,
+        "llm_used": None,
+        "fallback_reason": "none",
+    }
+
+    if local_only:
+        return _local_summary()
+
+    policy = get_fallback_policy()
+    key = get_openai_key()
+    if not key:
+        if policy in {"if_no_key", "on_error"}:
+            meta["fallback_reason"] = "no_api_key"
+            return _local_summary()
+        raise OpenAIConfigError("Missing OpenAI API key")
 
     try:  # pragma: no cover - network call
         client = build_client()
+        model = get_openai_model()
         upload = client.files.create(file=data, purpose="assistants", filename=filename)
         resp = client.responses.create(
-            model=OPENAI_MODEL,
+            model=model,
             input=[
                 {
                     "role": "system",
@@ -181,26 +203,27 @@ def llm_financial_summary_file(filename: str, data: bytes, *, local_only: bool =
         )
         text = (resp.output_text or "").strip()
         usage = getattr(resp, "usage", None)
-        meta = GenerationMeta(
-            llm_used=True,
-            provider="OpenAI",
-            model=OPENAI_MODEL,
-            token_usage=TokenUsage(
-                prompt_tokens=getattr(usage, "input_tokens", None),
-                completion_tokens=getattr(usage, "output_tokens", None),
-                total_tokens=getattr(usage, "total_tokens", None),
-            ),
-            forced_local=False,
+        meta.update(
+            {
+                "provider": "openai",
+                "model": model,
+                "llm_used": "openai",
+                "token_usage": {
+                    "prompt_tokens": getattr(usage, "input_tokens", None),
+                    "completion_tokens": getattr(usage, "output_tokens", None),
+                    "total_tokens": getattr(usage, "total_tokens", None),
+                },
+            }
         )
-    except Exception:
-        text = ""
-        meta = GenerationMeta(llm_used=False, forced_local=False)
+    except Exception as e:
+        if policy in {"on_error"}:
+            meta["fallback_reason"] = f"openai_error:{type(e).__name__}"
+            return _local_summary()
+        raise
 
     if not text:
-        from app.utils.file_to_text import file_bytes_to_text
-
-        raw_text = file_bytes_to_text(filename, data)
-        return llm_financial_summary({"raw_text": raw_text}, local_only=True)
+        meta["fallback_reason"] = "openai_error:empty_response"
+        return _local_summary()
 
     blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
     out = {"summary_text": text, "analysis_text": "", "insights_text": "", "source": "llm"}

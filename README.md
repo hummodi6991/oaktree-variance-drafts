@@ -38,3 +38,35 @@ WEB_THREADS=8           # threads per worker
 WEB_TIMEOUT=240         # request timeout in seconds
 WEB_KEEPALIVE=5         # keepalive in seconds
 ```
+
+### LLM configuration
+```
+OPENAI_API_KEY or AZURE_OPENAI_API_KEY  # one required for OpenAI calls
+OPENAI_BASE_URL                         # optional custom endpoint
+OPENAI_MODEL=gpt-4o-mini                # default model
+FORCE_LLM=false                         # force OpenAI even if local_only=true
+LOCAL_FALLBACK_POLICY=on_error|never|if_no_key
+                                        # when to fall back locally
+```
+
+### Manual checks
+```
+# Happy path (OpenAI)
+curl -s -X POST http://localhost:8000/drafts/from-file \
+  -F file=@tests/fixtures/sample.pdf \
+  -F local_only=false | jq '._meta'
+
+# Body flag forces local
+curl -s -X POST http://localhost:8000/drafts/from-file \
+  -F file=@tests/fixtures/sample.pdf \
+  -F local_only=true | jq '._meta'
+
+# Header ignored
+curl -s -X POST http://localhost:8000/drafts/from-file \
+  -H "x-local-only: true" \
+  -F file=@tests/fixtures/sample.pdf | jq '._meta'
+
+# Fallback policy (prod style)
+LOCAL_FALLBACK_POLICY=never OPENAI_API_KEY= \
+  uvicorn app.main:app  # then call endpoint and expect clear error
+```
