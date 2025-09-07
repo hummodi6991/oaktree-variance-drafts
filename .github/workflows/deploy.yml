@@ -127,25 +127,54 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE_REPO="${IMAGE_REPO:?missing}"; TAG="${IMAGE_TAG:?missing}"
-          APP_MODULE="${APP_MODULE_DETECTED:?missing}"
-          echo "Running image ${IMAGE_REPO}:${TAG} with APP_MODULE=${APP_MODULE} on PORT=${PORT}"
-          CID=$(docker run -d --rm -e PORT=${PORT} -e APP_MODULE="${APP_MODULE}" -p ${PORT}:${PORT} "${IMAGE_REPO}:${TAG}")
-          # Probe localhost until it responds or timeout
-          for i in {1..60}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/" || true)
-            if [ "$code" = "200" ] || [ "$code" = "302" ]; then
-              echo "Local smoke test passed with HTTP $code"
-              break
+          CANDIDATES=()
+          # include detected value (if any) and common fallbacks
+          if [ -n "${APP_MODULE_DETECTED:-}" ]; then CANDIDATES+=("${APP_MODULE_DETECTED}"); fi
+          CANDIDATES+=("main:app" "app:app")
+
+          run_and_probe () {
+            local module="$1"
+            local name="smoke_$RANDOM"
+            echo "==> Trying APP_MODULE=${module}"
+            # run without --rm so we can inspect even if it exits immediately
+            docker run -d --name "${name}" -e PORT="${PORT}" -e APP_MODULE="${module}" -p ${PORT}:${PORT} "${IMAGE_REPO}:${TAG}" >/dev/null
+            # wait up to ~60s for a response
+            for i in {1..60}; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/" || true)
+              if [ "$code" = "200" ] || [ "$code" = "302" ]; then
+                echo "Local smoke test PASSED with HTTP $code using APP_MODULE=${module}"
+                docker rm -f "${name}" >/dev/null 2>&1 || true
+                echo "APP_MODULE_FINAL=${module}" >> "$GITHUB_ENV"
+                return 0
+              fi
+              # if the container already exited, no need to keep waiting
+              status=$(docker inspect -f '{{.State.Running}}' "${name}" 2>/dev/null || echo "false")
+              if [ "$status" = "false" ]; then
+                echo "Container exited early while probing. Logs:"
+                docker logs "${name}" || true
+                exit_code=$(docker inspect -f '{{.State.ExitCode}}' "${name}" 2>/dev/null || echo "unknown")
+                echo "Container exit code: ${exit_code}"
+                docker rm -f "${name}" >/dev/null 2>&1 || true
+                return 1
+              fi
+              sleep 1
+            done
+            echo "Timeout waiting for HTTP response. Logs:"
+            docker logs "${name}" || true
+            docker rm -f "${name}" >/dev/null 2>&1 || true
+            return 1
+          }
+
+          # try candidates in order
+          for m in "${CANDIDATES[@]}"; do
+            if run_and_probe "$m"; then
+              exit 0
             fi
-            sleep 2
+            echo "---- Next candidate ----"
           done
-          if [ "$code" != "200" ] && [ "$code" != "302" ]; then
-            echo "::error::Local smoke test failed (HTTP $code). Printing container logs:"
-            docker logs "$CID" || true
-            docker rm -f "$CID" >/dev/null 2>&1 || true
-            exit 1
-          fi
-          docker rm -f "$CID" >/dev/null 2>&1 || true
+
+          echo "::error::All APP_MODULE candidates failed to serve traffic locally. Check logs above and adjust APP_MODULE or server startup."
+          exit 1
 
       - name: Push image to ACR
         shell: bash
