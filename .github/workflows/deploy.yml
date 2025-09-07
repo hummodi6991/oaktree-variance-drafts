@@ -230,15 +230,32 @@ jobs:
       - name: Warm up & basic health check
         shell: bash
         env:
+          # Tip: set this to the exact endpoint for your deployed slot/env
+          # e.g. https://<app>-<slot>.azurewebsites.net/health
           APP_URL: https://oaktree-variance-dev.azurewebsites.net/health
+          # total wait ≈ attempts * sleep_seconds (here: 120 * 5s = 10 min)
+          WARMUP_ATTEMPTS: "120"
+          WARMUP_SLEEP_SECONDS: "5"
         run: |
           set -euo pipefail
-          for i in {1..36}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL" || true)
-            if [ "$code" = "200" ] || [ "$code" = "302" ]; then
-              echo "Site is up with HTTP $code"; exit 0
-            fi
-            echo "Waiting for container... ($i/36) HTTP $code"
-            sleep 10
+          echo "Probing $APP_URL"
+          # preflight: show DNS/IP to catch resolution issues
+          getent hosts "$(echo "$APP_URL" | awk -F/ '{print $3}')" || true
+          # shell-safe loop
+          i=1
+          while [ "$i" -le "${WARMUP_ATTEMPTS}" ]; do
+            # follow redirects, short timeouts; map failures to 000 for logging
+            code="$(curl -fsS -o /dev/null -w "%{http_code}" -L \
+                     --connect-timeout 5 --max-time 8 "$APP_URL" 2>curl.err || echo 000)"
+            case "$code" in
+              200|204|301|302|308)
+                echo "Site is up with HTTP $code"; exit 0 ;;
+            esac
+            printf "Waiting for container... (%s/%s) HTTP %s\n" "$i" "${WARMUP_ATTEMPTS}" "$code"
+            # show the last curl error line if present (helps with HTTP 000)
+            [ -s curl.err ] && tail -n1 curl.err || true
+            i=$((i+1))
+            sleep "${WARMUP_SLEEP_SECONDS}"
           done
-          echo "::error::Site did not return 200/302 in time."; exit 1
+          echo "Error: Site did not return a success code (200/204/301/302/308) in time."
+          exit 1
