@@ -32,16 +32,19 @@ jobs:
           az group show -n "$AZURE_RESOURCE_GROUP" -o table
           az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" -o table
 
-      # Ensure ACR exists (idempotent); Basic SKU is fine for dev
-      - name: Ensure ACR exists
+      - name: Check ACR_NAME secret present
         shell: bash
         run: |
           set -euo pipefail
-          if ! az acr show -n "$ACR_NAME" >/dev/null 2>&1; then
-            az acr create -n "$ACR_NAME" -g "$AZURE_RESOURCE_GROUP" --sku Basic
+          if [ -z "${ACR_NAME:-}" ]; then
+            echo "::error::ACR_NAME is not set. Add repository secret ACR_NAME (e.g., oaktreevarianceacr)."; exit 1
           fi
-          # Enable admin for simple docker login (can switch to MI later)
-          az acr update -n "$ACR_NAME" --admin-enabled true
+
+      - name: Read ACR info (must already exist)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr show -n "$ACR_NAME" -o table
           echo "LOGIN_SERVER=$(az acr show -n \"$ACR_NAME\" --query loginServer -o tsv)" >> $GITHUB_ENV
 
       # Build & push image
