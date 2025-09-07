@@ -16,16 +16,3 @@ def is_local_only(request: Request) -> bool:
         or ""
     ).lower()
     return val in ("1", "true", "yes")
-
-
-def to_markdown_table(rows: list[dict]) -> str:
-    """Render a list of dicts as a simple markdown table."""
-    if not rows:
-        return ""
-    keys = list(rows[0].keys())
-    header = "| " + " | ".join(keys) + " |"
-    sep = "| " + " | ".join(["---"] * len(keys)) + " |"
-    lines = [header, sep]
-    for r in rows:
-        lines.append("| " + " | ".join(str(r.get(k, "")) for k in keys) + " |")
-    return "\n".join(lines)
