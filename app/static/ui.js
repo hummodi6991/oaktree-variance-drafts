@@ -21,7 +21,6 @@ async function generateFromSingleFile() {
     setStatus && setStatus('Done');
     return;
   }
-  renderAIBadge(data._meta || {});
   // NEW: Insights fallback (single-file track with no B/A and no recognizable line items)
   const variance = (data.variance_items || []);
   const hasVariance = Array.isArray(variance) && variance.length > 0;
@@ -34,9 +33,10 @@ async function generateFromSingleFile() {
     // Text-only: summary, analysis, insights (number-supported). No cards/tables/diagnostics.
     hardRemoveWorkbookInsights();
     renderSummaryAnalysisInsightsOnly({
-      summary_text: data.ai_narrative || data.summary_text || '',
+      summary_text: data.summary_text || '',
       analysis_text: data.analysis_text || '',
-      insights_text: data.insights_text || ''
+      insights_text: data.insights_text || '',
+      model_family: data.model_family || ''
     });
     setStatus && setStatus('Done');
   } else {
@@ -48,9 +48,15 @@ async function generateFromSingleFile() {
 function renderSummaryAnalysisInsightsOnly(payload) {
   const box = document.getElementById('result_box');
   box.innerHTML = '';
-  const { summary_text = '', analysis_text = '', insights_text = '' } = payload || {};
+  const { summary_text = '', analysis_text = '', insights_text = '', model_family = '' } = payload || {};
+
+  const label =
+    model_family === 'chatgpt' ? 'Generated via ChatGPT' :
+    model_family === 'local'   ? 'Generated locally'     : '';
+  const badge = label ? `<span class="pill">${label}</span>` : '';
 
   const parts = []
+    .concat(badge ? [badge] : [])
     .concat(summary_text ? [`<h3>Summary</h3><p>${escapeHtml(summary_text)}</p>`] : [])
     .concat(analysis_text ? [`<h3>Financial analysis</h3><p>${escapeHtml(analysis_text)}</p>`] : [])
     .concat(insights_text ? [`<h3>Financial insights</h3><p>${escapeHtml(insights_text)}</p>`] : []);
@@ -59,18 +65,6 @@ function renderSummaryAnalysisInsightsOnly(payload) {
   wrap.className = 'report__card';
   wrap.innerHTML = parts.join('\n');
   box.appendChild(wrap);
-}
-
-function renderAIBadge(meta){
-  const badge = document.getElementById('ai-badge');
-  if(!badge) return;
-  if(meta.llm_used){
-    badge.textContent = `AI assistance: On (${meta.model || 'ChatGPT'})`;
-    badge.className = 'ai-badge ai-on';
-  }else{
-    badge.textContent = 'AI assistance: Off (Local only)';
-    badge.className = 'ai-badge ai-off';
-  }
 }
 
 function hardRemoveWorkbookInsights(){
