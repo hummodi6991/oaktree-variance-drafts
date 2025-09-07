@@ -99,6 +99,8 @@
 <div id="msg" class="muted"></div>
 <div id="err" style="color:#dc2626;font-size:0.9rem;margin-top:.25rem"></div>
 <div id="warn" class="warn"></div>
+<div id="results"></div>
+<div id="ai-badge" class="ai-badge" aria-live="polite" title="Whether AI helped generate this result"></div>
 <h3>Result</h3>
 <pre id="out">{}</pre>
 
@@ -540,5 +542,8 @@
 
 <style>
   .warn { color:#f6c453; font-size:0.9rem; margin-top:.25rem }
+  .ai-badge{margin-top:12px;font:12px/1.2 system-ui;padding:6px 8px;border-radius:6px;display:inline-block}
+  .ai-on{background:#eef5ff;border:1px solid #c6ddff}
+  .ai-off{background:#f2f2f2;border:1px solid #ddd}
 </style>
 

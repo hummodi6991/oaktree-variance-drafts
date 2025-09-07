@@ -12,11 +12,10 @@ def test_single_generate_returns_summary_analysis_insights():
         resp = client.post("/single/generate", files={"file": ("sample.pdf", f, "application/pdf")})
     assert resp.status_code == 200
     data = resp.json()
-    assert "summary_text" in data
-    assert "analysis_text" in data and isinstance(data["analysis_text"], str)
-    assert "insights_text" in data and isinstance(data["insights_text"], str)
-    assert "analysis" not in data and "insights" not in data
-    assert data.get("model_family") in ("chatgpt", "local")
+    assert data.get("report_type") == "summary"
+    assert "procurement_summary" in data and isinstance(data["procurement_summary"], dict)
+    assert "analysis" in data and isinstance(data["analysis"], dict)
+    assert "insights" in data and isinstance(data["insights"], dict)
 
 
 def test_single_generate_respects_local_only_flag():
@@ -30,4 +29,4 @@ def test_single_generate_respects_local_only_flag():
         )
     assert resp.status_code == 200
     data = resp.json()
-    assert data.get("model_family") == "local"
+    assert data.get("_meta", {}).get("llm_used") is False

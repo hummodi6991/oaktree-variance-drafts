@@ -36,7 +36,5 @@ def test_drafts_from_file_returns_insights():
     assert resp.status_code == 200
     data = resp.json()
     assert data["kind"] == "insights"
-    assert "summary_text" in data
-    assert "analysis_text" in data and isinstance(data["analysis_text"], str)
-    assert "insights_text" in data and isinstance(data["insights_text"], str)
-    assert "analysis" not in data and "insights" not in data
+    assert data.get("report_type") == "variance"
+    assert "variance_items" in data and isinstance(data["variance_items"], list)
