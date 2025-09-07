@@ -1,4 +1,5 @@
 import io
+import io
 import pandas as pd
 
 from app.services.singlefile import process_single_file
@@ -11,7 +12,7 @@ def _xlsx_bytes(df: pd.DataFrame) -> bytes:
     return bio.getvalue()
 
 
-def test_doors_quotes_like_excel_returns_summary():
+def test_doors_quotes_like_excel_returns_summary(dummy_llm):
     data = [
         ["Vendor:", "AL AZAL", "", "", ""],
         ["", "", "", "", ""],

@@ -1,4 +1,4 @@
-
+import os
 import os
 import json
 from typing import Tuple, Dict, Any
@@ -10,89 +10,68 @@ from .prompt_contract import (
     build_arabic_instruction,
 )
 from openai_client_helper import build_client
+from app.llm.openai_client import OpenAIConfigError
 
 
-def _fallback_text(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str]:
-    """Return deterministic drafts when the OpenAI API is unavailable."""
-    en = (
-        f"{v.variance_pct:.2f}% (SAR {abs(v.variance_sar):,.0f}) variance in {v.category}. "
-        f"{'Drivers: ' + '; '.join(v.drivers) + '. ' if v.drivers else 'Cause pending analyst review. '}"
-        f"{'Vendors: ' + '; '.join(v.vendors) + '. ' if v.vendors else ''}"
-        "Impact remains contained within management oversight; corrective actions are in progress if required."
-    )
-    ar = (
-        f"تفاوت بنسبة {v.variance_pct:.2f}% (بقيمة {abs(v.variance_sar):,.0f} ريال) في فئة {v.category}. "
-        f"{'الأسباب: ' + '؛ '.join(v.drivers) + '. ' if v.drivers else 'السبب قيد المراجعة من قبل المحلل. '}"
-        f"{'الموردون: ' + '؛ '.join(v.vendors) + '. ' if v.vendors else ''}"
-        "يبقى الأثر ضمن نطاق المتابعة الإدارية، وسيتم اتخاذ الإجراءات التصحيحية عند الحاجة."
-    ) if cfg.bilingual else ""
-    return en, ar
-
-
-def generate_draft(v: VarianceItem, cfg: ConfigModel, *, local_only: bool = False) -> Tuple[str, str, GenerationMeta]:
+def generate_draft(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str, GenerationMeta]:
     """Generate an evidence-based variance explanation using ChatGPT.
 
-    The helper delegates to the OpenAI ChatGPT API when an API key is
-    available. Prompts forbid speculation so returned drafts remain
-    grounded in the provided `VarianceItem` fields.
+    Drafts are always produced by the LLM; deterministic local fallbacks have
+    been removed. An ``OpenAIConfigError`` is raised if no API key is
+    configured.
     """
-    # Support both OpenAI and Azure OpenAI environments
     api_key = (
         os.getenv("OPENAI_API_KEY")
         or os.getenv("AZURE_OPENAI_API_KEY")
         or ""
     ).strip()
+    if not api_key:
+        raise OpenAIConfigError("Missing OpenAI API key")
+
     user_prompt = build_user_prompt(v, cfg)
     ar_instr = build_arabic_instruction() if cfg.bilingual else ""
 
-    if local_only or not api_key:
-        en, ar = _fallback_text(v, cfg)
-        return en, ar, GenerationMeta(llm_used=False, forced_local=local_only)
-
-    try:  # pragma: no cover - network call
-        timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
-        model = os.getenv("OPENAI_MODEL", "gpt-5.1-mini")
-        client = build_client()
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt + ("\n\n" + ar_instr if ar_instr else "")},
-        ]
-        resp = client.responses.create(
-            model=model,
-            input=messages,
-            timeout=timeout,
-        )
-        text = (resp.output_text or "").strip()
-        usage = getattr(resp, "usage", None)
-        tu = TokenUsage(
-            prompt_tokens=getattr(usage, "input_tokens", None),
-            completion_tokens=getattr(usage, "output_tokens", None),
-            total_tokens=getattr(usage, "total_tokens", None),
-        )
-        meta = GenerationMeta(
-            llm_used=True,
-            provider="OpenAI",
-            model=model,
-            token_usage=tu,
-            forced_local=False,
-        )
-        if cfg.bilingual and "\n\n" in text:
-            en, ar = text.split("\n\n", 1)
-            return en.strip(), ar.strip(), meta
-        return text, "", meta
-    except Exception:
-        en, ar = _fallback_text(v, cfg)
-        return en, ar, GenerationMeta(llm_used=False, forced_local=False)
+    timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
+    model = os.getenv("OPENAI_MODEL", "gpt-5.1-mini")
+    client = build_client()
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt + ("\n\n" + ar_instr if ar_instr else "")},
+    ]
+    resp = client.responses.create(
+        model=model,
+        input=messages,
+        timeout=timeout,
+    )
+    text = (resp.output_text or "").strip()
+    if not text:
+        raise RuntimeError("Empty response from OpenAI")
+    usage = getattr(resp, "usage", None)
+    tu = TokenUsage(
+        prompt_tokens=getattr(usage, "input_tokens", None),
+        completion_tokens=getattr(usage, "output_tokens", None),
+        total_tokens=getattr(usage, "total_tokens", None),
+    )
+    meta = GenerationMeta(
+        llm_used=True,
+        provider="OpenAI",
+        model=model,
+        token_usage=tu,
+        forced_local=False,
+    )
+    if cfg.bilingual and "\n\n" in text:
+        en, ar = text.split("\n\n", 1)
+        return en.strip(), ar.strip(), meta
+    return text, "", meta
 
 
 def summarize_financials(summary: Dict[str, Any], analysis: Dict[str, Any]) -> str:
-    """Summarize procurement data using ChatGPT with a deterministic fallback."""
+    """Summarize procurement data using the OpenAI API without fallbacks."""
     highlights: list[str] = []
     if isinstance(summary, dict):
         highlights.extend(summary.get("highlights", []))
     if isinstance(analysis, dict):
         highlights.extend(analysis.get("highlights", []))
-    fallback = " ".join(highlights).strip() or "No financial insights available."
 
     api_key = (
         os.getenv("OPENAI_API_KEY")
@@ -100,26 +79,26 @@ def summarize_financials(summary: Dict[str, Any], analysis: Dict[str, Any]) -> s
         or ""
     ).strip()
     if not api_key:
-        return fallback
-    try:
-        timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
-        client = build_client()
-        prompt = (
-            "You are a financial analyst. Using the data below, write a concise "
-            "summary highlighting key financial insights.\n\n"
-            f"Highlights: {', '.join(highlights)}\n"
-            f"Analysis: {json.dumps(analysis, default=str)[:4000]}"
-        )
-        messages = [
-            {"role": "system", "content": "You are a helpful financial analysis assistant."},
-            {"role": "user", "content": prompt},
-        ]
-        resp = client.responses.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-5.1-mini"),
-            input=messages,
-            timeout=timeout,
-        )
-        text = (resp.output_text or "").strip()
-        return text or fallback
-    except Exception:
-        return fallback
+        raise OpenAIConfigError("Missing OpenAI API key")
+
+    timeout = int(os.getenv("OPENAI_TIMEOUT", "30"))
+    client = build_client()
+    prompt = (
+        "You are a financial analyst. Using the data below, write a concise "
+        "summary highlighting key financial insights.\n\n"
+        f"Highlights: {', '.join(highlights)}\n"
+        f"Analysis: {json.dumps(analysis, default=str)[:4000]}"
+    )
+    messages = [
+        {"role": "system", "content": "You are a helpful financial analysis assistant."},
+        {"role": "user", "content": prompt},
+    ]
+    resp = client.responses.create(
+        model=os.getenv("OPENAI_MODEL", "gpt-5.1-mini"),
+        input=messages,
+        timeout=timeout,
+    )
+    text = (resp.output_text or "").strip()
+    if not text:
+        raise RuntimeError("Empty response from OpenAI")
+    return text

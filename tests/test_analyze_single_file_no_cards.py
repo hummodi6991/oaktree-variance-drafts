@@ -4,7 +4,7 @@ import asyncio
 from app.parsers.single_file import analyze_single_file
 
 
-def test_analyze_single_file_discards_cards():
+def test_analyze_single_file_discards_cards(dummy_llm):
     pdf_path = pathlib.Path('samples/procurement_example.pdf')
     data = pdf_path.read_bytes()
     res = asyncio.run(analyze_single_file(data, pdf_path.name))

@@ -12,8 +12,6 @@ router = APIRouter()
 @router.post("/drafts/from-file")
 async def from_file(
     file: UploadFile = File(...),
-    local_only: bool = Form(False),
-    localOnly: bool = Form(False),
 ):
     """Simplified single-file endpoint delegating work to ChatGPT.
 
@@ -23,18 +21,14 @@ async def from_file(
     """
     try:
         data = await file.read()
-        # Only honor explicit body flags for local mode; ignore headers/query params
-        force_local = bool(local_only or localOnly)
         res = await asyncio.to_thread(
-            process_single_file, file.filename, data, local_only=force_local
+            process_single_file, file.filename, data
         )
         meta = res.pop("_meta", {})
         logger.info(
-            "drafts/from-file llm_used=%s model=%s forced_local=%s fallback_reason=%s",
+            "drafts/from-file llm_used=%s model=%s",
             meta.get("llm_used"),
             meta.get("model"),
-            meta.get("forced_local"),
-            meta.get("fallback_reason"),
         )
         return {"kind": "insights", **res, "_meta": meta}
     except Exception as e:  # pragma: no cover - defensive

@@ -23,7 +23,7 @@ def _multi_sheet_bytes() -> bytes:
     return buf.getvalue()
 
 
-def test_drafts_from_file_returns_insights():
+def test_drafts_from_file_returns_insights(dummy_llm):
     client = TestClient(app)
     files = {
         "file": (

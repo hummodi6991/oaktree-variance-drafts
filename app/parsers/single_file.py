@@ -9,8 +9,6 @@ async def analyze_single_file(
     name: str,
     bilingual: bool = True,
     no_speculation: bool = True,
-    *,
-    local_only: bool = False,
 ) -> Dict[str, Any]:
     """Analyze a single file by delegating to ChatGPT for insights.
 
@@ -19,6 +17,6 @@ async def analyze_single_file(
     offload the work to a thread via :func:`asyncio.to_thread` to avoid blocking
     the event loop.
     """
-    res = await asyncio.to_thread(process_single_file, name, data, local_only=local_only)
+    res = await asyncio.to_thread(process_single_file, name, data)
     res.pop("_meta", None)
     return {"report_type": "summary", **res, "source": name}

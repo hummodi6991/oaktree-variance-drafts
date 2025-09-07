@@ -3,7 +3,6 @@ async function generateFromSingleFile() {
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file);
-  fd.append('local_only', document.getElementById('optLocalOnly')?.checked ? 'true' : 'false');
 
   const resp = await fetch('/drafts/from-file', { method: 'POST', body: fd });
   let data = {};
@@ -51,8 +50,7 @@ function renderSummaryAnalysisInsightsOnly(payload) {
   const { summary_text = '', analysis_text = '', insights_text = '', model_family = '' } = payload || {};
 
   const label =
-    model_family === 'chatgpt' ? 'Generated via ChatGPT' :
-    model_family === 'local'   ? 'Generated locally'     : '';
+    model_family === 'chatgpt' ? 'Generated via ChatGPT' : '';
   const badge = label ? `<span class="pill">${label}</span>` : '';
 
   const parts = []

@@ -2,17 +2,11 @@ from fastapi import Request
 
 
 def is_local_only(request: Request) -> bool:
-    """Return True if the client requested local-only processing.
+    """Always return ``False`` as local-only mode is disabled.
 
-    Accepts both snake_case and camelCase variations in headers or query
-    parameters (``local_only`` / ``localOnly``).  A truthy value such as
-    ``"true"`` or ``"1"`` triggers local-only mode.
+    The application previously supported bypassing the LLM and generating
+    drafts locally.  This behaviour has been removed so that all outputs are
+    AI-assisted.  The helper now ignores any request flags and simply returns
+    ``False``.
     """
-    val = (
-        request.headers.get("x-local-only")
-        or request.headers.get("local-only")
-        or request.query_params.get("localOnly")
-        or request.query_params.get("local_only")
-        or ""
-    ).lower()
-    return val in ("1", "true", "yes")
+    return False
