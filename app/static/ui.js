@@ -3,6 +3,7 @@ async function generateFromSingleFile() {
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file);
+  fd.append('local_only', document.getElementById('optLocalOnly')?.checked ? 'true' : 'false');
 
   const resp = await fetch('/drafts/from-file', { method: 'POST', body: fd });
   let data = {};
@@ -35,7 +36,7 @@ async function generateFromSingleFile() {
       summary_text: data.summary_text || '',
       analysis_text: data.analysis_text || '',
       insights_text: data.insights_text || '',
-      source: data.source || ''
+      model_family: data.model_family || ''
     });
     setStatus && setStatus('Done');
   } else {
@@ -47,14 +48,13 @@ async function generateFromSingleFile() {
 function renderSummaryAnalysisInsightsOnly(payload) {
   const box = document.getElementById('result_box');
   box.innerHTML = '';
-  const { summary_text = '', analysis_text = '', insights_text = '', source = '' } = payload || {};
+  const { summary_text = '', analysis_text = '', insights_text = '', model_family = '' } = payload || {};
 
-  // Badge: AI-aided vs Local (driven by pipeline 'source' flag)
-  const badge =
-    source === 'llm'   ? '<span class="pill">AI-aided</span>' :
-    source === 'local' ? '<span class="pill">Local</span>'    : '';
+  const label =
+    model_family === 'chatgpt' ? 'Generated via ChatGPT' :
+    model_family === 'local'   ? 'Generated locally'     : '';
+  const badge = label ? `<span class="pill">${label}</span>` : '';
 
-  // Build HTML with the badge on top
   const parts = []
     .concat(badge ? [badge] : [])
     .concat(summary_text ? [`<h3>Summary</h3><p>${escapeHtml(summary_text)}</p>`] : [])

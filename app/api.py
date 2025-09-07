@@ -12,12 +12,18 @@ logger = logging.getLogger(__name__)
 
 # --- Single Data File endpoint ---
 @app.post("/single/generate")
-async def single_generate(request: Request, file: UploadFile = File(...), bilingual: bool = Form(True)):
+async def single_generate(
+    request: Request,
+    file: UploadFile = File(...),
+    bilingual: bool = Form(True),
+    local_only: bool = Form(False),
+    localOnly: bool = Form(False),
+):
     """Return LLM-generated summary/analysis/insights for any single file upload."""
     data = await file.read()
-    local_only = is_local_only(request)
+    force_local = local_only or localOnly or is_local_only(request)
     res = await asyncio.to_thread(
-        process_single_file, file.filename or "upload.bin", data, local_only=local_only
+        process_single_file, file.filename or "upload.bin", data, local_only=force_local
     )
     meta = res.pop("_meta", {})
     logger.info(

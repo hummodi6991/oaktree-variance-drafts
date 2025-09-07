@@ -690,7 +690,7 @@ async def create_drafts_async(
         "result": None,
     }
 
-    local_only = is_local_only(request)
+    local_only = req.local_only or is_local_only(request)
 
     def run_job():
         try:
@@ -743,7 +743,7 @@ def ceo_ui():
 @app.post("/drafts", response_model=DraftsOrSummary, dependencies=deps)
 def create_drafts(request: Request, req: DraftRequest):
     """Create EN/AR variance explanation drafts."""
-    local_only = is_local_only(request)
+    local_only = req.local_only or is_local_only(request)
     result, meta = generate_drafts(req, force_local=local_only)
     logger.info(
         "drafts llm_used=%s model=%s forced_local=%s",
@@ -770,8 +770,10 @@ async def upload(
     bilingual: bool = Form(True),
     enforce_no_speculation: bool = Form(True),
     api_key: Optional[str] = Form(None),
+    local_only: bool = Form(False),
+    localOnly: bool = Form(False),
 ):
-    local_only = is_local_only(request)
+    local_only = local_only or localOnly or is_local_only(request)
 
     # Optional simple API key check using the same header logic
     from app.schemas import (
@@ -1120,12 +1122,17 @@ async def drafts_upload(
 
 
 @app.post("/singlefile/report")
-async def singlefile_report(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
+async def singlefile_report(
+    request: Request,
+    file: UploadFile = File(...),
+    local_only: bool = Form(False),
+    localOnly: bool = Form(False),
+) -> Dict[str, Any]:
     """Return summary/analysis/insights for a single uploaded file."""
     data = await file.read()
-    local_only = is_local_only(request)
+    force_local = local_only or localOnly or is_local_only(request)
     res = await asyncio.to_thread(
-        process_single_file, file.filename or "upload.bin", data, local_only=local_only
+        process_single_file, file.filename or "upload.bin", data, local_only=force_local
     )
     meta = res.pop("_meta", {})
     logger.info(
@@ -1143,16 +1150,18 @@ async def analyze_single_file_endpoint(
     file: UploadFile = File(...),
     bilingual: bool = Form(True),
     no_speculation: bool = Form(True),
+    local_only: bool = Form(False),
+    localOnly: bool = Form(False),
 ) -> Dict[str, Any]:
     """Analyze a single file by delegating to ChatGPT."""
     data = await file.read()
-    local_only = is_local_only(request)
+    force_local = local_only or localOnly or is_local_only(request)
     res, meta = await analyze_single_file(
         data,
         file.filename,
         bilingual=bilingual,
         no_speculation=no_speculation,
-        local_only=local_only,
+        local_only=force_local,
     )
     logger.info(
         "singlefile_analyze llm_used=%s model=%s forced_local=%s",
@@ -1188,7 +1197,12 @@ def jobs_get(job_id: str, request: Request):
 
 
 @app.post("/singlefile/generate-async")
-async def generate_from_file_async(request: Request, file: UploadFile = File(...)):
+async def generate_from_file_async(
+    request: Request,
+    file: UploadFile = File(...),
+    local_only: bool = Form(False),
+    localOnly: bool = Form(False),
+):
     rid = getattr(request.state, "request_id", str(uuid.uuid4()))
     if not file:
         raise HTTPException(status_code=400, detail="no_file")
@@ -1212,13 +1226,15 @@ async def generate_from_file_async(request: Request, file: UploadFile = File(...
         stage="queued",
     )
 
-    local_only = is_local_only(request)
+    local_only = local_only or localOnly or is_local_only(request)
 
     async def _worker():
         t0 = time.time()
         try:
             jobs_put(job_id, status="parsing", stage="parsing")
-            result = await asyncio.to_thread(process_single_file, name, raw, local_only=local_only)
+            result = await asyncio.to_thread(
+                process_single_file, name, raw, local_only=local_only
+            )
             meta = result.pop("_meta", {})
             jobs_put(
                 job_id,
