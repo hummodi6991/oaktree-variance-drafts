@@ -33,7 +33,7 @@ def _build_workbook():
 def test_doors_quotes_adapter_handles_workbook():
     data = _build_workbook()
     resp = process_single_file('doors_quotes.xlsx', data)
-    assert 'summary_text' in resp
-    assert 'analysis_text' in resp and isinstance(resp['analysis_text'], str)
-    assert 'insights_text' in resp and isinstance(resp['insights_text'], str)
-    assert 'analysis' not in resp and 'insights' not in resp
+    assert resp['report_type'] == 'summary'
+    assert 'procurement_summary' in resp and isinstance(resp['procurement_summary'], dict)
+    assert 'analysis' in resp and isinstance(resp['analysis'], dict)
+    assert 'insights' in resp and isinstance(resp['insights'], dict)
