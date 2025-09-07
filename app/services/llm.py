@@ -142,7 +142,12 @@ def llm_financial_summary_file(filename: str, data: bytes, *, local_only: bool =
     :func:`llm_financial_summary`.
     """
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    # Support both OpenAI and Azure OpenAI environments
+    api_key = (
+        os.getenv("OPENAI_API_KEY")
+        or os.getenv("AZURE_OPENAI_API_KEY")
+        or ""
+    ).strip()
     if local_only or not api_key:
         from app.utils.file_to_text import file_bytes_to_text
 

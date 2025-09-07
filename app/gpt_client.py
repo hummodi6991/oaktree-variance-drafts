@@ -36,7 +36,12 @@ def generate_draft(v: VarianceItem, cfg: ConfigModel, *, local_only: bool = Fals
     available. Prompts forbid speculation so returned drafts remain
     grounded in the provided `VarianceItem` fields.
     """
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    # Support both OpenAI and Azure OpenAI environments
+    api_key = (
+        os.getenv("OPENAI_API_KEY")
+        or os.getenv("AZURE_OPENAI_API_KEY")
+        or ""
+    ).strip()
     user_prompt = build_user_prompt(v, cfg)
     ar_instr = build_arabic_instruction() if cfg.bilingual else ""
 
@@ -89,7 +94,11 @@ def summarize_financials(summary: Dict[str, Any], analysis: Dict[str, Any]) -> s
         highlights.extend(analysis.get("highlights", []))
     fallback = " ".join(highlights).strip() or "No financial insights available."
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = (
+        os.getenv("OPENAI_API_KEY")
+        or os.getenv("AZURE_OPENAI_API_KEY")
+        or ""
+    ).strip()
     if not api_key:
         return fallback
     try:
