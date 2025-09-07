@@ -5,7 +5,6 @@ inputs:
     required: true
   local_only:
     type: boolean
-    required: false
     default: false   # ChatGPT by default; set true to force local
 
 actions:
