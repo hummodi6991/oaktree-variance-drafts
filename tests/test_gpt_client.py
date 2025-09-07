@@ -42,3 +42,36 @@ def test_generate_draft_timeout(monkeypatch):
     os.environ.pop("OPENAI_API_KEY")
     os.environ.pop("OPENAI_TIMEOUT")
     os.environ.pop("OPENAI_MAX_RETRIES")
+
+
+class BilingualDummyClient:
+    class _Resp:
+        output_text = "English line 1\nEnglish line 2\n\nالشرح العربي هنا"
+        usage = None
+
+    class _Responses:
+        def create(self, *args, **kwargs):
+            return BilingualDummyClient._Resp()
+
+    def __init__(self, *args, **kwargs):
+        self.responses = BilingualDummyClient._Responses()
+
+
+def test_generate_draft_bilingual_split(monkeypatch):
+    os.environ["OPENAI_API_KEY"] = "sk-test"
+    monkeypatch.setattr("app.gpt_client.build_client", lambda: BilingualDummyClient())
+
+    v = VarianceItem(
+        project_id="P1",
+        period="2024-01",
+        category="Materials",
+        budget_sar=1000.0,
+        actual_sar=1200.0,
+        variance_sar=200.0,
+        variance_pct=20.0,
+    )
+    cfg = ConfigModel(bilingual=True)
+    en, ar, _ = generate_draft(v, cfg)
+    assert en == "English line 1\nEnglish line 2"
+    assert ar == "الشرح العربي هنا"
+    os.environ.pop("OPENAI_API_KEY")

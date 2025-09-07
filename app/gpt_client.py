@@ -1,6 +1,6 @@
 import os
-import os
 import json
+import re
 from typing import Tuple, Dict, Any
 
 from .schemas import VarianceItem, ConfigModel, GenerationMeta, TokenUsage
@@ -59,9 +59,14 @@ def generate_draft(v: VarianceItem, cfg: ConfigModel) -> Tuple[str, str, Generat
         token_usage=tu,
         forced_local=False,
     )
-    if cfg.bilingual and "\n\n" in text:
-        en, ar = text.split("\n\n", 1)
-        return en.strip(), ar.strip(), meta
+    if cfg.bilingual:
+        # Split English and Arabic drafts by detecting the first Arabic character.
+        arabic_match = re.search(r"[\u0600-\u06FF]", text)
+        if arabic_match:
+            idx = arabic_match.start()
+            en = text[:idx].strip()
+            ar = text[idx:].strip()
+            return en, ar, meta
     return text, "", meta
 
 
