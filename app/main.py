@@ -58,7 +58,6 @@ from app.services.insights import compute_procurement_insights, summarize_procur
 from app.gpt_client import summarize_financials
 from openai_client_helper import build_client
 from app.routers import drafts as drafts_router
-from app.utils.local import is_local_only
 
 app: FastAPI = FastAPI(title="Oaktree Variance Drafts API", version="0.1.0")
 
@@ -690,8 +689,6 @@ async def create_drafts_async(
         "result": None,
     }
 
-    local_only = req.local_only or is_local_only(request)
-
     def run_job():
         try:
             _set_job(job_id, status="running", progress=5, message="Validating input")
@@ -703,7 +700,7 @@ async def create_drafts_async(
                     message=msg or jobs[job_id].get("message"),
                 )
 
-            result, meta = generate_drafts(req, progress_cb=cb, force_local=local_only)
+            result, meta = generate_drafts(req, progress_cb=cb)
             payload = {
                 "variances": result,
                 "_meta": meta.model_dump(),
@@ -716,10 +713,9 @@ async def create_drafts_async(
                 result=payload,
             )
             logger.info(
-                "drafts_async llm_used=%s model=%s forced_local=%s",
+                "drafts_async llm_used=%s model=%s",
                 meta.llm_used,
                 meta.model,
-                meta.forced_local,
             )
         except Exception as e:  # pragma: no cover - error path
             _set_job(job_id, status="error", message=str(e))
@@ -743,13 +739,11 @@ def ceo_ui():
 @app.post("/drafts", response_model=DraftsOrSummary, dependencies=deps)
 def create_drafts(request: Request, req: DraftRequest):
     """Create EN/AR variance explanation drafts."""
-    local_only = req.local_only or is_local_only(request)
-    result, meta = generate_drafts(req, force_local=local_only)
+    result, meta = generate_drafts(req)
     logger.info(
-        "drafts llm_used=%s model=%s forced_local=%s",
+        "drafts llm_used=%s model=%s",
         meta.llm_used,
         meta.model,
-        meta.forced_local,
     )
     if isinstance(result, list):
         return {"variances": result, "_meta": meta.model_dump()}
@@ -770,10 +764,8 @@ async def upload(
     bilingual: bool = Form(True),
     enforce_no_speculation: bool = Form(True),
     api_key: Optional[str] = Form(None),
-    local_only: bool = Form(False),
-    localOnly: bool = Form(False),
 ):
-    local_only = local_only or localOnly or is_local_only(request)
+    
 
     # Optional simple API key check using the same header logic
     from app.schemas import (
@@ -897,7 +889,7 @@ async def upload(
                         category_map=[],
                         config=cfg,
                     )
-                    drafts, meta = generate_drafts(req, force_local=local_only)
+                    drafts, meta = generate_drafts(req)
                     logger.info(
                         "upload llm_used=%s model=%s forced_local=%s",
                         meta.llm_used,
@@ -980,7 +972,7 @@ async def upload(
         config=cfg,
     )
 
-    result, meta = generate_drafts(req, force_local=local_only)
+    result, meta = generate_drafts(req)
     logger.info(
         "upload llm_used=%s model=%s forced_local=%s",
         meta.llm_used,
@@ -1125,21 +1117,17 @@ async def drafts_upload(
 async def singlefile_report(
     request: Request,
     file: UploadFile = File(...),
-    local_only: bool = Form(False),
-    localOnly: bool = Form(False),
 ) -> Dict[str, Any]:
     """Return summary/analysis/insights for a single uploaded file."""
     data = await file.read()
-    force_local = local_only or localOnly or is_local_only(request)
     res = await asyncio.to_thread(
-        process_single_file, file.filename or "upload.bin", data, local_only=force_local
+        process_single_file, file.filename or "upload.bin", data
     )
     meta = res.pop("_meta", {})
     logger.info(
-        "singlefile_report llm_used=%s model=%s forced_local=%s",
+        "singlefile_report llm_used=%s model=%s",
         meta.get("llm_used"),
         meta.get("model"),
-        meta.get("forced_local"),
     )
     return {"kind": "insights", **res, "_meta": meta}
 
@@ -1150,24 +1138,19 @@ async def analyze_single_file_endpoint(
     file: UploadFile = File(...),
     bilingual: bool = Form(True),
     no_speculation: bool = Form(True),
-    local_only: bool = Form(False),
-    localOnly: bool = Form(False),
 ) -> Dict[str, Any]:
     """Analyze a single file by delegating to ChatGPT."""
     data = await file.read()
-    force_local = local_only or localOnly or is_local_only(request)
     res, meta = await analyze_single_file(
         data,
         file.filename,
         bilingual=bilingual,
         no_speculation=no_speculation,
-        local_only=force_local,
     )
     logger.info(
-        "singlefile_analyze llm_used=%s model=%s forced_local=%s",
+        "singlefile_analyze llm_used=%s model=%s",
         meta.llm_used,
         meta.model,
-        meta.forced_local,
     )
     res["_meta"] = meta.model_dump()
     return res
@@ -1200,8 +1183,6 @@ def jobs_get(job_id: str, request: Request):
 async def generate_from_file_async(
     request: Request,
     file: UploadFile = File(...),
-    local_only: bool = Form(False),
-    localOnly: bool = Form(False),
 ):
     rid = getattr(request.state, "request_id", str(uuid.uuid4()))
     if not file:
@@ -1226,14 +1207,12 @@ async def generate_from_file_async(
         stage="queued",
     )
 
-    local_only = local_only or localOnly or is_local_only(request)
-
     async def _worker():
         t0 = time.time()
         try:
             jobs_put(job_id, status="parsing", stage="parsing")
             result = await asyncio.to_thread(
-                process_single_file, name, raw, local_only=local_only
+                process_single_file, name, raw
             )
             meta = result.pop("_meta", {})
             jobs_put(
@@ -1245,10 +1224,9 @@ async def generate_from_file_async(
                 payload={**result, "_meta": meta},
             )
             logger.info(
-                "singlefile_generate_async llm_used=%s model=%s forced_local=%s",
+                "singlefile_generate_async llm_used=%s model=%s",
                 meta.get("llm_used"),
                 meta.get("model"),
-                meta.get("forced_local"),
             )
         except ValueError as ve:
             jobs_put(

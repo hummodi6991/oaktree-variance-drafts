@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-def test_upload_endpoint():
+def test_upload_endpoint(dummy_llm):
     client = TestClient(app)
     base = Path("data/templates")
     with (
@@ -39,7 +39,7 @@ def test_upload_endpoint():
     assert all("draft_en" in item for item in result)
 
 
-def test_upload_endpoint_excel():
+def test_upload_endpoint_excel(dummy_llm):
     client = TestClient(app)
     base = Path("data/templates")
 
@@ -86,7 +86,7 @@ def test_upload_endpoint_excel():
     assert all("draft_en" in item for item in result)
 
 
-def test_upload_single_data_file():
+def test_upload_single_data_file(dummy_llm):
     client = TestClient(app)
     files = {
         "data_file": ("notes.txt", b"item a 100\nitem b 200", "text/plain"),
@@ -100,7 +100,7 @@ def test_upload_single_data_file():
     assert data.get("summary")
 
 
-def test_upload_single_data_file_budget_variance():
+def test_upload_single_data_file_budget_variance(dummy_llm):
     client = TestClient(app)
     file_content = (
         b"project_id,period,cost_code,budget_sar,actual_sar\n"
@@ -121,7 +121,7 @@ def test_upload_single_data_file_budget_variance():
     assert data["unpaired_summary"]["total_actual_sar"] == 80.0
 
 
-def test_upload_text_budget_actuals():
+def test_upload_text_budget_actuals(dummy_llm):
     client = TestClient(app)
     text = b"Project Alpha planned 100 actual 120\n"
     files = {"data_file": ("notes.txt", text, "text/plain")}
@@ -133,7 +133,7 @@ def test_upload_text_budget_actuals():
     assert data["unpaired_count"] == 0
 
 
-def test_upload_text_summary():
+def test_upload_text_summary(dummy_llm):
     client = TestClient(app)
     text = b"This file only contains narrative text without numbers."
     files = {"data_file": ("notes.txt", text, "text/plain")}
@@ -144,7 +144,7 @@ def test_upload_text_summary():
     assert "narrative" in data["summary"].lower()
 
 
-def test_upload_mutual_exclusive():
+def test_upload_mutual_exclusive(dummy_llm):
     client = TestClient(app)
     base = Path("data/templates")
     with (base / "budget_actuals.csv").open("rb") as ba:
@@ -156,7 +156,7 @@ def test_upload_mutual_exclusive():
     assert resp.status_code == 400
 
 
-def test_pdf_fallback(monkeypatch):
+def test_pdf_fallback(monkeypatch, dummy_llm):
     client = TestClient(app)
     monkeypatch.setattr("app.main.pdf_extract_text", lambda *a, **k: "")
 
@@ -190,7 +190,7 @@ def test_pdf_fallback(monkeypatch):
     assert all("description" in c for c in data["analysis"]["top_lines_by_amount"])
 
 
-def test_upload_llm_failure(monkeypatch):
+def test_upload_llm_failure(monkeypatch, dummy_llm):
     """Ensure missing LLM does not crash single-file upload."""
     client = TestClient(app)
     monkeypatch.setattr("app.main.extract_items_via_llm", lambda *_: (_ for _ in ()).throw(RuntimeError("no model")))
@@ -203,7 +203,7 @@ def test_upload_llm_failure(monkeypatch):
     assert data.get("summary") == ""
 
 
-def test_extract_freeform_procurement_summary():
+def test_extract_freeform_procurement_summary(dummy_llm):
     client = TestClient(app)
     file_content = b"co_id\nD01\nD02\n"
     files = {"files": ("test.csv", file_content, "text/csv")}
@@ -219,7 +219,7 @@ def test_extract_freeform_procurement_summary():
     assert all("item_code" in c for c in cards)
 
 
-def test_extract_freeform_budget_actuals():
+def test_extract_freeform_budget_actuals(dummy_llm):
     client = TestClient(app)
     file_content = (
         b"project_id,period,cost_code,budget_sar,actual_sar\n"

@@ -15,7 +15,7 @@ def _load_csv(path: Path):
         return list(csv.DictReader(f))
 
 
-def test_create_drafts_endpoint():
+def test_create_drafts_endpoint(dummy_llm):
     base = Path('data/templates')
     payload = {
         'budget_actuals': _load_csv(base / 'budget_actuals.csv'),

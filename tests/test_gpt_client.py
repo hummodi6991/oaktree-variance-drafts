@@ -1,4 +1,5 @@
 import os
+import pytest
 from app.gpt_client import generate_draft
 from app.schemas import VarianceItem, ConfigModel
 
@@ -34,12 +35,10 @@ def test_generate_draft_timeout(monkeypatch):
         vendors=["Vendor"],
     )
     cfg = ConfigModel()
-    en, ar, meta = generate_draft(v, cfg)
-    assert "variance" in en
+    with pytest.raises(TimeoutError):
+        generate_draft(v, cfg)
     assert DummyOpenAI.last_kwargs["timeout"] == 1
     assert DummyOpenAI.last_kwargs["max_retries"] == 5
-    assert ar  # bilingual fallback text
-    assert meta.llm_used is False
     os.environ.pop("OPENAI_API_KEY")
     os.environ.pop("OPENAI_TIMEOUT")
     os.environ.pop("OPENAI_MAX_RETRIES")

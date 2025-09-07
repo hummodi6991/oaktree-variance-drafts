@@ -1,5 +1,8 @@
 import io
 import pandas as pd
+import io
+import pandas as pd
+
 from app.services.singlefile import process_single_file
 
 
@@ -30,7 +33,7 @@ def _build_workbook():
     return bio.getvalue()
 
 
-def test_doors_quotes_adapter_handles_workbook():
+def test_doors_quotes_adapter_handles_workbook(dummy_llm):
     data = _build_workbook()
     resp = process_single_file('doors_quotes.xlsx', data)
     assert 'summary_text' in resp

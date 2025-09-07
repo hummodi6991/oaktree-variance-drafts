@@ -3,7 +3,7 @@ from pathlib import Path
 from app.services.singlefile import process_single_file
 
 
-def test_pdf_produces_summary_and_insights():
+def test_pdf_produces_summary_and_insights(dummy_llm):
     data = Path('samples/procurement_example.pdf').read_bytes()
     res = process_single_file('procurement_example.pdf', data)
     assert 'summary_text' in res and isinstance(res['summary_text'], str)
@@ -15,4 +15,4 @@ def test_pdf_produces_summary_and_insights():
     assert 'analysis' not in res and 'insights' not in res
     assert 'items' not in res
     assert 'mode' not in res
-    assert res.get('model_family') in ('chatgpt', 'local')
+    assert res.get('model_family') == 'chatgpt'

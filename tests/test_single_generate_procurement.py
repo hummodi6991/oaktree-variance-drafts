@@ -5,7 +5,7 @@ from app.main import app
 import app.api as _api  # noqa: F401 - ensure /single/generate route is registered
 
 
-def test_single_generate_returns_summary_analysis_insights():
+def test_single_generate_returns_summary_analysis_insights(dummy_llm):
     client = TestClient(app)
     pdf_path = Path(__file__).resolve().parent.parent / "samples" / "procurement_example.pdf"
     with pdf_path.open("rb") as f:
@@ -16,10 +16,10 @@ def test_single_generate_returns_summary_analysis_insights():
     assert "analysis_text" in data and isinstance(data["analysis_text"], str)
     assert "insights_text" in data and isinstance(data["insights_text"], str)
     assert "analysis" not in data and "insights" not in data
-    assert data.get("model_family") in ("chatgpt", "local")
+    assert data.get("model_family") == "chatgpt"
 
 
-def test_single_generate_respects_local_only_flag():
+def test_single_generate_respects_local_only_flag(dummy_llm):
     client = TestClient(app)
     pdf_path = Path(__file__).resolve().parent.parent / "samples" / "procurement_example.pdf"
     with pdf_path.open("rb") as f:
@@ -30,4 +30,4 @@ def test_single_generate_respects_local_only_flag():
         )
     assert resp.status_code == 200
     data = resp.json()
-    assert data.get("model_family") == "local"
+    assert data.get("model_family") == "chatgpt"

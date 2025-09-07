@@ -238,8 +238,6 @@ def _noop_progress(pct: int, msg: str = "") -> None:
 def generate_drafts(
     req: DraftRequest,
     progress_cb: Callable[[int, str], None] = _noop_progress,
-    *,
-    force_local: bool = False,
 ) -> Tuple[Any, GenerationMeta]:
     """High-level helper to build drafts from CSV-derived models."""
     progress_cb(10, "Loading & validating input")
@@ -262,16 +260,16 @@ def generate_drafts(
             progress_cb(40, "Summarizing budget/actuals")
             summary = _summarize_generic_rows(rows, label="budget_actuals")
             summary["message"] = "No budget/actual pairs detected — showing summary."
-            return summary, GenerationMeta(llm_used=False, forced_local=force_local)
+            return summary, GenerationMeta(llm_used=False)
         if req.change_orders:
             progress_cb(40, "Summarizing change orders")
             return _summarize_change_orders(req.change_orders, cat_lu), GenerationMeta(
-                llm_used=False, forced_local=force_local
+                llm_used=False
             )
         if getattr(req, "raw_rows", None):
             progress_cb(40, "Summarizing uploaded rows")
             return _summarize_generic_rows(req.raw_rows, label="single_file"), GenerationMeta(
-                llm_used=False, forced_local=force_local
+                llm_used=False
             )
         if getattr(req, "vendor_map", None):
             progress_cb(40, "Summarizing vendor map")
@@ -282,7 +280,7 @@ def generate_drafts(
                 for v in req.vendor_map
             ]
             return _summarize_generic_rows(rows, label="vendor_map"), GenerationMeta(
-                llm_used=False, forced_local=force_local
+                llm_used=False
             )
         if getattr(req, "category_map", None):
             progress_cb(40, "Summarizing category map")
@@ -293,7 +291,7 @@ def generate_drafts(
                 for v in req.category_map
             ]
             return _summarize_generic_rows(rows, label="category_map"), GenerationMeta(
-                llm_used=False, forced_local=force_local
+                llm_used=False
             )
         return (
             {
@@ -301,7 +299,7 @@ def generate_drafts(
                 "message": "No budget/actuals detected and no tabular data available to summarize.",
                 "insights": {},
             },
-            GenerationMeta(llm_used=False, forced_local=force_local),
+            GenerationMeta(llm_used=False),
         )
 
     progress_cb(55, "Preparing EN prompt")
@@ -316,13 +314,13 @@ def generate_drafts(
         progress_cb(60, "Summarizing budget/actuals")
         summary = _summarize_generic_rows(rows, label="budget_actuals")
         summary["message"] = "No variances met materiality — showing summary."
-        return summary, GenerationMeta(llm_used=False, forced_local=force_local)
+        return summary, GenerationMeta(llm_used=False)
     out: List[DraftResponse] = []
-    meta = GenerationMeta(llm_used=False, forced_local=force_local)
+    meta = GenerationMeta(llm_used=False)
     usage_totals = TokenUsage()
     for v in material:
         progress_cb(75, "Calling model (EN)")
-        en, ar, m = generate_draft(v, req.config, local_only=force_local)
+        en, ar, m = generate_draft(v, req.config)
         progress_cb(85, "Calling model (AR)")
         out.append(DraftResponse(variance=v, draft_en=en, draft_ar=ar or None))
         if m.llm_used:
