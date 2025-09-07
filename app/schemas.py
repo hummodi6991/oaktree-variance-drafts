@@ -1,7 +1,7 @@
 
 """Pydantic data models for the Variance Drafts service."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from typing import List, Optional, Any, Dict, Union
 from typing_extensions import Literal
 
@@ -60,6 +60,9 @@ class DraftRequest(BaseModel):
     vendor_map: List[VendorMapRow] = Field(default_factory=list)
     category_map: List[CategoryMapRow] = Field(default_factory=list)
     config: ConfigModel = Field(default_factory=ConfigModel)
+    local_only: bool = Field(
+        default=False, validation_alias=AliasChoices("local_only", "localOnly")
+    )
 
 class DraftResponse(BaseModel):
     variance: VarianceItem

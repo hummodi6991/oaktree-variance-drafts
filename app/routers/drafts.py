@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Request
+from fastapi import APIRouter, UploadFile, File, Request, Form
 import asyncio
 import logging
 
@@ -11,7 +11,12 @@ router = APIRouter()
 
 
 @router.post("/drafts/from-file")
-async def from_file(request: Request, file: UploadFile = File(...)):
+async def from_file(
+    request: Request,
+    file: UploadFile = File(...),
+    local_only: bool = Form(False),
+    localOnly: bool = Form(False),
+):
     """Simplified single-file endpoint delegating work to ChatGPT.
 
     The uploaded file is forwarded to the LLM without any local parsing.  The
@@ -20,9 +25,9 @@ async def from_file(request: Request, file: UploadFile = File(...)):
     """
     try:
         data = await file.read()
-        local_only = is_local_only(request)
+        force_local = local_only or localOnly or is_local_only(request)
         res = await asyncio.to_thread(
-            process_single_file, file.filename, data, local_only=local_only
+            process_single_file, file.filename, data, local_only=force_local
         )
         meta = res.pop("_meta", {})
         logger.info(

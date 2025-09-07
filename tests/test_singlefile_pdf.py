@@ -15,4 +15,4 @@ def test_pdf_produces_summary_and_insights():
     assert 'analysis' not in res and 'insights' not in res
     assert 'items' not in res
     assert 'mode' not in res
-    assert res.get('source') in ('llm', 'local')
+    assert res.get('model_family') in ('chatgpt', 'local')

@@ -24,7 +24,11 @@ def process_single_file(
     """
 
     # LLM-only: no fallbacks. Use retries for transient failures, then raise.
-    res, meta = retry_call(llm_financial_summary_file, filename, data, local_only=False)
+    res, meta = retry_call(
+        llm_financial_summary_file, filename, data, local_only=local_only
+    )
+    # surface the model family so the UI can label results
+    res["model_family"] = "local" if local_only else "chatgpt"
     res["_meta"] = meta.model_dump()
     return res
 
