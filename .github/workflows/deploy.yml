@@ -128,6 +128,34 @@ jobs:
                        SCM_DO_BUILD_DURING_DEPLOYMENT=false WEBSITE_RUN_FROM_PACKAGE=0 \
                        DOCKER_ENABLE_CI=true
 
+      - name: Ensure app settings (port & entrypoint)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az webapp config appsettings set \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --settings WEBSITES_PORT=8000 APP_MODULE=main:app WEBSITES_CONTAINER_START_TIME_LIMIT=1800
+          echo "Current image/port:"
+          az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" \
+            --query "{image:siteConfig.linuxFxVersion, port:siteConfig.appSettings[?name=='WEBSITES_PORT'].value | [0]}" -o table
+
+      - name: Enable & tail container logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          az webapp log config \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --docker-container-logging filesystem
+          # brief restart to pick up settings
+          az webapp restart -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME"
+          # tail for up to 10 minutes in background so we can see startup errors
+          ( az webapp log tail \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --timeout 600 || true ) &
+
       - name: Warm up & basic health check
         shell: bash
         env:
