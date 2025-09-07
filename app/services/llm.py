@@ -1,3 +1,4 @@
+from openai_file_upload import upload_bytes_as_file
 from typing import Dict, Any, Tuple
 
 from app.schemas import GenerationMeta, TokenUsage
@@ -84,7 +85,7 @@ def llm_financial_summary_file(filename: str, data: bytes) -> Tuple[Dict[str, st
 
     client = build_client()
     model = get_openai_model()
-    upload = client.files.create(file=data, purpose="assistants", filename=filename)
+    file_id = upload_bytes_as_file(data, filename)
     resp = client.responses.create(
         model=model,
         input=[
@@ -102,7 +103,7 @@ def llm_financial_summary_file(filename: str, data: bytes) -> Tuple[Dict[str, st
                             "sections: Summary, Financial analysis, Financial insights."
                         ),
                     },
-                    {"type": "input_file", "file_id": upload.id},
+                    {"type": "input_file", "file_id": file_id},
                 ],
             },
         ],
