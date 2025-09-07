@@ -3,6 +3,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 WORKDIR /app
+# --- Ensure TLS trust store is present so HTTPS to api.openai.com works ---
+# Put this BEFORE any `USER <non-root>` line and before your app starts.
+# Handles both Alpine and Debian/Ubuntu base images.
+RUN if [ -f /etc/alpine-release ]; then \
+      apk add --no-cache ca-certificates curl && update-ca-certificates ; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+      rm -rf /var/lib/apt/lists/* && update-ca-certificates ; \
+    fi
 # Install system deps if you need them; keep minimal
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
 # Install Python deps
