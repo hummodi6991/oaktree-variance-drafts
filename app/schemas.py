@@ -76,7 +76,11 @@ class SummaryResponse(BaseModel):
 # Envelope used by /drafts to return the list together with metadata
 class DraftsEnvelope(BaseModel):
     variances: List[DraftResponse]
-    _meta: Optional[Dict[str, Any]] = None
+    meta: Optional[Dict[str, Any]] = Field(default=None, alias="_meta")
+
+    model_config = {
+        "populate_by_name": True,
+    }
 
 # Endpoints may return either the wrapped list of drafts or a summary
 DraftsOrSummary = Union[DraftsEnvelope, SummaryResponse]
